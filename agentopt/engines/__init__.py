@@ -18,6 +18,8 @@ PRESETS = {
 _P1 = {**_S02, "compile_decode": True, "gqa_decode_attn": True}
 PRESETS.update({
     "p2_s01": ("batch", {**_P1, "num_slots": 32}),                # continuous batching, 32 slots
+    "p2_s02": ("batch", {**_P1, "num_slots": 32,                  # + cross-turn / shared-prefix state reuse
+                         "prefix_reuse": True}),
 })
 
 

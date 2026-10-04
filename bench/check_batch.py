@@ -4,6 +4,11 @@ The decode graph always computes all S rows and rows never mix (GEMM rows, per-r
 prompt decoded alone on slot 0 and the same prompt decoded on another slot while other sequences join and leave
 at different steps must give bit-identical tokens. Any difference = cross-talk (positions, masks, states).
 
+With prefix reuse it also checks the two reuse paths against a full prefill (same tokens expected, up to
+float differences from processing the prompt in two chunks):
+  shared: fresh prefill on top of the restored shared-prefix snapshot;
+  extend: prefill ids[:-17] first, then the full prompt extends the slot by 17 tokens.
+
     python bench/check_batch.py --stage p2_s01_continuous_batching --engine p2_s01
 """
 import argparse
@@ -35,8 +40,39 @@ def main():
     prompts = [tok.encode(AgentState(t).prompt_text(tok), add_special_tokens=False)
                for t in load_tasks(args.num_tasks)]
 
+    def gen_all(pre=None):
+        outs = []
+        for ids in prompts:
+            if pre is not None:
+                engine.prefill(0, pre(ids))
+            outs.append(engine.generate(ids, args.max_new_tokens, Timer())[0])
+        return outs
+
+    def compare(a_list, b_list):
+        rows = []
+        for a, b in zip(a_list, b_list):
+            div = next((k for k, (x, y) in enumerate(zip(a, b)) if x != y), None)
+            if div is None and len(a) != len(b):
+                div = min(len(a), len(b))
+            rows.append({"identical": a == b, "first_divergence": div, "len_a": len(a), "len_b": len(b)})
+        return rows
+
+    report = {"engine": args.engine}
+    reuse = engine.options.get("prefix_reuse", False)
+    if reuse:
+        engine.prefix_reuse = False
+        full = gen_all()
+        engine.prefix_reuse = True
+        n = next((i for i, xs in enumerate(zip(*prompts)) if len(set(xs)) > 1), min(map(len, prompts)) - 1)
+        engine.set_shared_prefix(prompts[0][:n])
+        for name, pre in [("extend", lambda ids: ids[:-17]), ("shared", None)]:
+            outs = gen_all(pre)
+            rows = compare(full, outs)
+            report[name] = rows
+            print(f"{name} vs full prefill: {sum(r['identical'] for r in rows)}/{len(rows)} identical; "
+                  f"divergences {[r['first_divergence'] for r in rows]}  (shared prefix {n} tokens)")
     t0 = time.perf_counter()
-    alone = [engine.generate(ids, args.max_new_tokens, Timer())[0] for ids in prompts]
+    alone = gen_all()
     alone_s = time.perf_counter() - t0
 
     # Concurrent: prompt i joins at step i * stagger on slot S-1-i (not slot 0), rows leave when done.
@@ -60,12 +96,7 @@ def main():
         step += 1
     conc_s = time.perf_counter() - t0
 
-    rows = []
-    for a, b in zip(alone, outs):
-        div = next((k for k, (x, y) in enumerate(zip(a, b)) if x != y), None)
-        if div is None and len(a) != len(b):
-            div = min(len(a), len(b))
-        rows.append({"identical": a == b, "first_divergence": div, "alone_len": len(a), "concurrent_len": len(b)})
+    rows = compare(alone, outs)
     n_id = sum(r["identical"] for r in rows)
     print(f"{args.engine}: {n_id}/{len(rows)} identical alone vs concurrent; alone {alone_s:.1f}s, "
           f"concurrent {conc_s:.1f}s ({step} steps); divergences {[r['first_divergence'] for r in rows]}")
@@ -77,7 +108,7 @@ def main():
     out = ROOT / "results" / args.stage
     out.mkdir(parents=True, exist_ok=True)
     (out / "batch_check.json").write_text(json.dumps(
-        {"engine": args.engine, "identical": n_id, "rows": rows, "alone_s": alone_s, "concurrent_s": conc_s,
+        {**report, "identical": n_id, "rows": rows, "alone_s": alone_s, "concurrent_s": conc_s,
          "steps": step, "alone_tokens": alone, "env": env_info()}, indent=2))
 
 

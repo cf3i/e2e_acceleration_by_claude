@@ -47,6 +47,13 @@ def run_serial(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int =
 def run_continuous(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6):
     tok, stop_ids = engine.tok, engine.stop_ids
     queue, free = collections.deque(tasks), list(range(engine.num_slots))[::-1]
+    engine.reset_stats()
+    if getattr(engine, "prefix_reuse", False) and len(tasks) >= 2:
+        # Shared prefix = what all first-turn prompts have in common (system prompt + tool schema + chat header).
+        firsts = [tok.encode(AgentState(t).prompt_text(tok), add_special_tokens=False) for t in tasks[:4]]
+        n = next((i for i, xs in enumerate(zip(*firsts)) if len(set(xs)) > 1), min(map(len, firsts)) - 1)
+        with timer("prefill"):
+            engine.set_shared_prefix(firsts[0][:n])
     live = {}  # slot -> per-turn state of the agent occupying it
     results, turns = [], []
 

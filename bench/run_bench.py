@@ -119,6 +119,8 @@ def main():
         makespan = time.perf_counter() - t0
         m = summarize(results, turns, makespan)
         m["breakdown"] = timer.breakdown(makespan)
+        if hasattr(engine, "stats"):
+            m["engine_stats"] = dict(engine.stats)
         reps.append((m, results, turns))
         print(f"[rep {r}] makespan={makespan:.1f}s acc={m['accuracy']:.3f} "
               f"gen_tok={m['gen_tokens']} decode={m['decode_ms_per_token']:.2f}ms/tok", flush=True)

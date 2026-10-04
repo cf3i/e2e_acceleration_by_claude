@@ -11,6 +11,11 @@ state accessors) and has two modes:
   attention gets the whole [S, kv_heads, max_len, d] buffer with a per-row mask. Linear-attention states are
   read and updated for all slots in place.
 
+Prefill can also *extend* a slot (start > 0): the new tokens attend to the slot's KV prefix, and the
+Gated-DeltaNet layers continue from the slot's conv window / recurrent state (see hybrid_prefill.py). That is
+what cross-turn reuse and the shared system-prompt prefix are built on. Unlike KV, a recurrent state exists only
+at the position where it was saved, so reuse is possible exactly at a slot's current end or at a snapshot.
+
 Storage is allocated lazily from the first prefill, so dtypes/shapes are whatever HF's layers produce.
 Rows without a live sequence are parked at position `max_len - 1` (a scratch slot real sequences never reach).
 """
@@ -35,11 +40,16 @@ class SlotCache:
         self.layers = [_LinearSlots() if t == "linear_attention" else None for t in self.layer_types]
         self.keys = [None] * len(self.layer_types)
         self.values = [None] * len(self.layer_types)
-        self.mode, self.slot, self.start = "decode", 0, 0
+        self.mode, self.slot, self.start, self.n_new = "decode", 0, 0, 0
+        self.prev_conv = None  # extend mode: the slot's conv window before this prefill (current layer)
 
     # --- mode switches (host side, outside the captured graph) ---
-    def begin_prefill(self, slot: int, start: int = 0):
-        self.mode, self.slot, self.start = "prefill", slot, start
+    def begin_prefill(self, slot: int, start: int = 0, n_new: int = 0):
+        self.mode, self.slot, self.start, self.n_new = "prefill", slot, start, n_new
+
+    @property
+    def extending(self) -> bool:
+        return self.mode == "prefill" and self.start > 0
 
     def begin_decode(self):
         self.mode = "decode"
@@ -76,7 +86,13 @@ class SlotCache:
         if layer.conv_states is None:
             layer.conv_states = conv_states.new_zeros((self.num_slots, *conv_states.shape[1:]))
         if self.mode == "prefill":
-            layer.conv_states[self.slot].copy_(conv_states[0])
+            new = conv_states[0]  # last K inputs of the new tokens, zero-padded on the left if n_new < K
+            if self.extending:
+                # The window must continue the slot's previous inputs, not zero padding.
+                self.prev_conv = layer.conv_states[self.slot].clone()
+                k = min(self.n_new, new.shape[-1])
+                new = torch.cat([self.prev_conv, new[:, new.shape[-1] - k:]], -1)[:, -new.shape[-1]:]
+            layer.conv_states[self.slot].copy_(new)
             return layer.conv_states[self.slot:self.slot + 1]
         layer.conv_states.copy_(conv_states)
         return layer.conv_states
@@ -90,6 +106,26 @@ class SlotCache:
             return layer.recurrent_states[self.slot:self.slot + 1]
         layer.recurrent_states.copy_(recurrent_states)
         return layer.recurrent_states
+
+    # --- snapshots (shared prefix) ---
+    def snapshot(self, slot: int, n: int) -> dict:
+        """Copy of everything slot `slot` holds for its first n tokens (valid only if n == its current end)."""
+        return {"n": n,
+                "kv": [(k[slot, :, :n].clone(), v[slot, :, :n].clone()) if k is not None else None
+                       for k, v in zip(self.keys, self.values)],
+                "lin": [(l.conv_states[slot].clone(), l.recurrent_states[slot].clone()) if l is not None else None
+                        for l in self.layers]}
+
+    def restore(self, slot: int, snap: dict):
+        n = snap["n"]
+        for k, v, kv in zip(self.keys, self.values, snap["kv"]):
+            if kv is not None:
+                k[slot, :, :n].copy_(kv[0])
+                v[slot, :, :n].copy_(kv[1])
+        for l, lin in zip(self.layers, snap["lin"]):
+            if lin is not None:
+                l.conv_states[slot].copy_(lin[0])
+                l.recurrent_states[slot].copy_(lin[1])
 
     def memory_bytes(self) -> int:
         ts = [t for t in self.keys + self.values if t is not None]
