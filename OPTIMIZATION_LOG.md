@@ -13,6 +13,8 @@ Each entry: profile evidence → Amdahl estimate → change → measured result 
 | p1_s05_async_readback | p1 | + pipelined token readback | 31.1 | – | – | – | −1.3%; launch cost was profiler-inflated; 8/8 identical to p1_s04 |
 | p1_s06_compile | p1 | + torch.compile decode (inside our graph) | 25.6 | – | – | – | 1.22×; elementwise 6.48 → 1.14 ms/step; 7/8 identical (near-tie) |
 | p1_s07_gqa_decode_attn | p1 | + GQA-folded GEMM decode attention | **21.4** | **474.8** | **3.52** | 0.9375 | 75% of roofline; GEMM 92% of step; decode 92% of e2e |
+| p2_s01_continuous_batching | p2 | slot cache + batch-32 decode graph + continuous runner | 30.4 ms/step (1.2 ms/tok amortized) | **60.8** | **27.5** | 0.9375 | ~25.5 live rows; prefill 46% / decode 40% / tool 13% |
+| p2_s02_prefix_reuse | p2 | + cross-turn extend + shared-prefix snapshot | same | 60.7 | 27.6 | 0.9375 | prefill tokens −89% but prefill time unchanged (~107 ms/call fixed) |
 
 ## stage00_baseline
 - Profile: GPU busy 0.21; `_cudnn_attention_forward` 31% of CPU time (2.4 ms CPU / 13 µs GPU per call);
@@ -77,3 +79,18 @@ Each entry: profile evidence → Amdahl estimate → change → measured result 
 What mattered, in order: CUDA graph (host-bound → GPU-bound, 1.87×), torch.compile fusion (1.22×), decode
 attention rewrite (1.19×), cuDNN-SDPA off (cold cliff), fla kernels (prefill 3.8×). Two estimates were badly off
 (p1_s01 from a too-short profile, p1_s05 from profiler-inflated host time) — both corrected by uninstrumented A/B.
+
+## p2_s01_continuous_batching — 32 agents in flight, one decode graph
+- Evidence: phase-1 end: decode 92% of e2e, and 88% of a step is the weight read → batch independent agents.
+- Change: duck-typed slot cache (per-row KV write position + mask row), eager batch-1 prefill into a slot,
+  CUDA-graph replay of the compiled step at batch 32, continuous admission.
+- Result: **60.8 s (7.8× vs p1_s07, 27.5× vs baseline)**, acc 0.9375; 797 steps × 30.4 ms; check_batch 8/8.
+  Task latency p50 3.2 → 11.5 s (throughput/latency trade).
+
+## p2_s02_prefix_reuse — reuse previous turn + shared system prefix
+- Evidence: 55% of prompt tokens re-prefill the previous turn; 352-token common prefix.
+- Hybrid model: recurrent state only at the saved position → reuse at slot end (extend) or a snapshot.
+- Estimate: ~−20 s (prefill tokens −89%). Result: **0 s** — prefill time 27.9 → 27.9 s, per-call median ~107 ms
+  both ways. **Eager prefill is per-call (host) bound, not token bound**; the micro had shown it (105 ms @512 vs
+  124 ms @1024). Measure p on the cost driver.
+- Next: short suffixes as forced tokens through the decode graph (sim: ~47.7 s).
