@@ -27,7 +27,7 @@ echo "== torch.profiler"
 python bench/profile_torch.py --stage "$STAGE" --tasks "$TORCH_TASKS" ${ARGS:-}
 
 echo "== nsys"
-nsys profile -t cuda,nvtx,osrt --sample=none --cpuctxsw=none --force-overwrite=true -o "$P/nsys" \
+nsys profile -t cuda,nvtx,osrt --cuda-graph-trace=node --sample=none --cpuctxsw=none --force-overwrite=true -o "$P/nsys" \
   python bench/run_bench.py --stage "$STAGE" --num-tasks "$NSYS_TASKS" --out "$P/nsys_run" ${ARGS:-}
 nsys stats --force-export=true --format csv --output "$P/nsys" \
   --report cuda_gpu_kern_sum,nvtx_sum,cuda_api_sum,cuda_gpu_mem_time_sum "$P/nsys.nsys-rep" > /dev/null
