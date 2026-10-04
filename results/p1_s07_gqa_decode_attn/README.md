@@ -12,3 +12,17 @@ Estimate: attention 4.45 → <1 ms → step 24.9 → ~21.5 ms.
 
 - Correctness (job 297184): **8/8 identical** to p1_s06.
 - Micro (job 297185): decode 25.6 → **21.4 ms/tok** (−16%), **75% of roofline**, flat over ctx 512–2048.
+- Node-level profile (job 297189): 20.98 ms GPU per replay; **GEMM 19.22 ms = 92%** (incl. the two attention
+  bmm's), inductor 1.23 ms, fla/conv 0.51 ms. The `fmha_cutlassF` + repeat_kv copies are gone.
+
+## End-to-end, end of phase 1 (job 297188, `metrics.json`)
+| makespan | vs baseline | accuracy | decode ms/tok | prefill tok/s | p50 task latency | peak mem |
+|---|---|---|---|---|---|---|
+| **474.8 s** | **3.52×** | 0.9375 (same as p1_s04) | 21.6 | 4457 | 3.2 s | 50.7 GB |
+
+Breakdown: decode 92.0%, prefill 6.0%, tool 1.8%.
+
+## Phase-1 exit
+Decode is at 75% of the 16.1 ms HBM floor and 92% of the step is weight GEMMs at ~85% of HBM bandwidth. At
+batch 1 the only remaining lever is reading fewer bytes (FP8 weights) — or kernel work, out of scope. The
+workload, however, has 128 independent agents: phase 2 amortizes the weight read over many sequences.

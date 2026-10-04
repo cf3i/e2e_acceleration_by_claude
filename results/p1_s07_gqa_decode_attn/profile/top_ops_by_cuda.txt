@@ -1,0 +1,46 @@
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                      nvjet_tst_192x8_64x8_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us        1.223s        36.80%        1.223s      62.454us         19584  
+                      nvjet_tst_64x8_64x16_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us        1.130s        33.99%        1.130s      38.451us         29376  
+                     nvjet_tst_128x8_64x12_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us     273.287ms         8.22%     273.287ms      37.212us          7344  
+                      nvjet_tst_512x8_64x3_2x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us     129.973ms         3.91%     129.973ms     838.535us           155  
+                                               aten::mm         1.38%      48.956ms         1.66%      59.102ms      59.458us      72.351ms         2.18%      72.826ms      73.266us           994  
+               nvjet_tst_64x8_64x16_1x1_v_bz_splitK_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      70.614ms         2.12%      70.614ms       4.808us         14688  
+     triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0         0.00%       0.000us         0.00%       0.000us       0.000us      42.433ms         1.28%      42.433ms       2.454us         17289  
+            fused_recurrent_gated_delta_rule_fwd_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      34.630ms         1.04%      34.630ms       4.715us          7344  
+void cublasLt::splitKreduce_kernel<32, 16, int, floa...         0.00%       0.000us         0.00%       0.000us       0.000us      34.370ms         1.03%      34.370ms       1.738us         19776  
+               nvjet_tst_64x8_64x16_4x1_v_bz_splitK_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      31.215ms         0.94%      31.215ms       6.376us          4896  
+void causal_conv1d_update_kernel<Causal_conv1d_updat...         0.00%       0.000us         0.00%       0.000us       0.000us      25.450ms         0.77%      25.450ms       3.465us          7344  
+                          triton_poi_fused_copy_copy__4         0.00%       0.000us         0.00%       0.000us       0.000us      20.920ms         0.63%      20.920ms       2.849us          7344  
+              nvjet_tst_384x104_64x3_2x1_v_bz_coopA_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      20.332ms         0.61%      20.332ms     158.846us           128  
+                      nvjet_tst_64x8_64x16_4x1_v_bz_NNT         0.00%       0.000us         0.00%       0.000us       0.000us      19.970ms         0.60%      19.970ms       8.158us          2448  
+                            layer_norm_gated_fwd_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      19.002ms         0.57%      19.002ms       2.554us          7440  
+                    nvjet_tst_192x104_64x5_1x2_h_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      15.795ms         0.48%      15.795ms      89.747us           176  
+                     aten::_efficient_attention_forward         0.01%     352.448us         0.03%     920.493us      28.765us      14.564ms         0.44%      14.564ms     455.111us            32  
+fmha_cutlassF_bf16_aligned_32x128_gmem_sm80(PyTorchM...         0.00%       0.000us         0.00%       0.000us       0.000us      14.564ms         0.44%      14.564ms     455.111us            32  
+                    nvjet_tst_128x176_64x5_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      14.449ms         0.43%      14.449ms      82.094us           176  
+                     nvjet_tst_128x8_64x12_2x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      13.389ms         0.40%      13.389ms       5.469us          2448  
+               triton_poi_fused__unsafe_view_mul_silu_1         0.00%       0.000us         0.00%       0.000us       0.000us      12.806ms         0.39%      12.806ms       1.744us          7344  
+                                            aten::copy_         0.26%       9.326ms         0.66%      23.476ms      11.755us      12.464ms         0.38%      12.464ms       6.242us          1997  
+triton_poi_fused__to_copy__unsafe_view_add_clone_emp...         0.00%       0.000us         0.00%       0.000us       0.000us      11.662ms         0.35%      11.662ms       1.588us          7344  
+                    triton_poi_fused__unsafe_view_add_2         0.00%       0.000us         0.00%       0.000us       0.000us      11.436ms         0.34%      11.436ms       1.557us          7344  
+triton_poi_fused__to_copy__unsafe_view_add_clone_emp...         0.00%       0.000us         0.00%       0.000us       0.000us       9.858ms         0.30%       9.858ms       1.342us          7344  
+triton_poi_fused__to_copy__unsafe_view_add_clone_emp...         0.00%       0.000us         0.00%       0.000us       0.000us       9.623ms         0.29%       9.623ms       1.310us          7344  
+triton_poi_fused__to_copy__unsafe_view_add_clone_emp...         0.00%       0.000us         0.00%       0.000us       0.000us       9.607ms         0.29%       9.607ms       1.308us          7344  
+                    nvjet_tst_128x144_64x6_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us       9.137ms         0.27%       9.137ms      71.383us           128  
+triton_red_fused__softmax__to_copy_bitwise_not_exp_m...         0.00%       0.000us         0.00%       0.000us       0.000us       8.714ms         0.26%       8.714ms       3.560us          2448  
+                                              aten::mul         0.14%       5.114ms         0.29%      10.257ms       9.938us       7.594ms         0.23%       7.594ms       7.358us          1032  
+triton_red_fused__to_copy__unsafe_view_add_mean_mul_...         0.00%       0.000us         0.00%       0.000us       0.000us       7.326ms         0.22%       7.326ms       2.993us          2448  
+                            ChunkGatedDeltaRuleFunction         1.78%      63.427ms         2.18%      77.613ms     808.472us       6.882ms         0.21%       8.015ms      83.488us            96  
+               triton_poi_fused_add_arange_index_copy_4         0.00%       0.000us         0.00%       0.000us       0.000us       6.541ms         0.20%       6.541ms       1.336us          4896  
+void at::native::elementwise_kernel<128, 4, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us       6.139ms         0.18%       6.139ms      15.987us           384  
+void at::native::elementwise_kernel<128, 2, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us       5.133ms         0.15%       5.133ms       6.937us           740  
+              triton_poi_fused__unsafe_view_mul_silu_12         0.00%       0.000us         0.00%       0.000us       0.000us       4.134ms         0.12%       4.134ms       1.689us          2448  
+              nvjet_tst_256x104_64x4_4x1_v_bz_coopA_TNT         0.00%       0.000us         0.00%       0.000us       0.000us       4.089ms         0.12%       4.089ms      63.897us            64  
+triton_per_fused__to_copy__unsafe_view_mean_pow_spli...         0.00%       0.000us         0.00%       0.000us       0.000us       4.050ms         0.12%       4.050ms       1.655us          2448  
+triton_poi_fused__unsafe_view_clone_mul_sigmoid_spli...         0.00%       0.000us         0.00%       0.000us       0.000us       3.906ms         0.12%       3.906ms       1.596us          2448  
+triton_poi_fused__to_copy__unsafe_view_add_cat_mean_...         0.00%       0.000us         0.00%       0.000us       0.000us       3.891ms         0.12%       3.891ms       1.590us          2448  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 3.555s
+Self CUDA time total: 3.323s

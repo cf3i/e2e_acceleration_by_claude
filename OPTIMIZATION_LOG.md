@@ -12,7 +12,7 @@ Each entry: profile evidence → Amdahl estimate → change → measured result 
 | p1_s04_cuda_graph | p1 | + CUDA-graph decode step | **31.5** | **660.8** | **2.53** | 0.9375 | 51% of roofline; GPU busy 0.83; 7/8 greedy outputs identical to p1_s02 (1 near-tie) |
 | p1_s05_async_readback | p1 | + pipelined token readback | 31.1 | – | – | – | −1.3%; launch cost was profiler-inflated; 8/8 identical to p1_s04 |
 | p1_s06_compile | p1 | + torch.compile decode (inside our graph) | 25.6 | – | – | – | 1.22×; elementwise 6.48 → 1.14 ms/step; 7/8 identical (near-tie) |
-| p1_s07_gqa_decode_attn | p1 | + GQA-folded GEMM decode attention | **21.4** | (running) | – | – | −16%; 75% of roofline; 8/8 identical to p1_s06 |
+| p1_s07_gqa_decode_attn | p1 | + GQA-folded GEMM decode attention | **21.4** | **474.8** | **3.52** | 0.9375 | 75% of roofline; GEMM 92% of step; decode 92% of e2e |
 
 ## stage00_baseline
 - Profile: GPU busy 0.21; `_cudnn_attention_forward` 31% of CPU time (2.4 ms CPU / 13 µs GPU per call);
@@ -71,3 +71,9 @@ Each entry: profile evidence → Amdahl estimate → change → measured result 
 - Result: **21.4 ms/tok** (−16%), 75% of the 16.1 ms floor, 8/8 identical. GEMM (~18.8 ms, 85% of HBM BW) is
   now ~88% of the step → phase-1 exit criterion met; the remaining levers are lower-precision weights (FP8,
   phase 2) or kernel work (out of scope).
+
+## Phase 1 summary
+1673.6 s → 474.8 s (3.52×), accuracy 0.930 → 0.9375; decode 63 (cold 438) → 21.4 ms/tok (25% → 75% of roofline).
+What mattered, in order: CUDA graph (host-bound → GPU-bound, 1.87×), torch.compile fusion (1.22×), decode
+attention rewrite (1.19×), cuDNN-SDPA off (cold cliff), fla kernels (prefill 3.8×). Two estimates were badly off
+(p1_s01 from a too-short profile, p1_s05 from profiler-inflated host time) — both corrected by uninstrumented A/B.
