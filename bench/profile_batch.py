@@ -44,6 +44,18 @@ def main():
         engine.step()
     step_ms = (time.perf_counter() - t0) / args.steps * 1e3
     print(f"{args.engine}: S={S}, step {step_ms:.2f} ms ({step_ms / S:.3f} ms per row)", flush=True)
+    bucket_ms = {}
+    for B, g in sorted(getattr(engine, "graphs", {}).items()):  # bare replay time of each bucket graph
+        for _ in range(5):
+            g.replay()
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        for _ in range(50):
+            g.replay()
+        torch.cuda.synchronize()
+        bucket_ms[B] = (time.perf_counter() - t0) / 50 * 1e3
+    if bucket_ms:
+        print("bucket replay ms:", {B: round(v, 2) for B, v in bucket_ms.items()}, flush=True)
 
     torch.cuda.profiler.start()
     for _ in range(args.trace_steps):
@@ -52,7 +64,7 @@ def main():
     torch.cuda.profiler.stop()
     (out / "batch_step.json").write_text(json.dumps(
         {"engine": args.engine, "options": engine.options, "num_slots": S, "step_ms": step_ms,
-         "steps": args.steps, "peak_mem_gb": torch.cuda.max_memory_allocated() / 1e9, "env": env_info()}, indent=2))
+         "steps": args.steps, "bucket_ms": bucket_ms, "peak_mem_gb": torch.cuda.max_memory_allocated() / 1e9, "env": env_info()}, indent=2))
 
 
 if __name__ == "__main__":
