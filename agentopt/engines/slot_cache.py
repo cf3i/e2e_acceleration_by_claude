@@ -27,22 +27,13 @@ import torch
 
 
 class _LinearSlots:
-    """What the Gated-DeltaNet layer reads directly: all slots' states (decode: the first B rows)."""
-    def __init__(self, cache):
-        self.cache = cache
-        self.conv_full = None
-        self.rec_full = None
+    """What the Gated-DeltaNet layer reads directly in decode: the first B rows of the states.
 
-    def _rows(self, t):
-        return t if t is None or self.cache.mode == "prefill" else t[:self.cache.B]
-
-    @property
-    def conv_states(self):
-        return self._rows(self.conv_full)
-
-    @property
-    def recurrent_states(self):
-        return self._rows(self.rec_full)
+    Plain attributes, re-pointed by `set_rows` (a property reading cache.B was not reliably guarded by dynamo:
+    a graph traced for one bucket got reused for another). Prefill uses conv_full / rec_full."""
+    def __init__(self):
+        self.conv_full = self.rec_full = None
+        self.conv_states = self.recurrent_states = None
 
 
 class SlotCache:
@@ -56,7 +47,7 @@ class SlotCache:
         self.layer_types = config.layer_types
         self.attn_idx = [i for i, t in enumerate(self.layer_types) if t != "linear_attention"]
         self.lin_idx = [i for i, t in enumerate(self.layer_types) if t == "linear_attention"]
-        self.layers = [_LinearSlots(self) if t == "linear_attention" else None for t in self.layer_types]
+        self.layers = [_LinearSlots() if t == "linear_attention" else None for t in self.layer_types]
         self.keys = [None] * len(self.layer_types)
         self.values = [None] * len(self.layer_types)
         self.big = {}  # "k" / "v" / "conv" / "rec" -> [layers, S, ...] storage behind the per-layer views
@@ -87,6 +78,11 @@ class SlotCache:
 
     def set_rows(self, B: int):
         self.B = B
+        for l in self.layers:
+            if l is not None and l.conv_full is not None:
+                l.conv_states = l.conv_full[:B]
+            if l is not None and l.rec_full is not None:
+                l.recurrent_states = l.rec_full[:B]
 
     def _alloc(self, name, like, idx, tail):
         big = like.new_zeros((len(idx), self.num_slots, *tail))
@@ -125,6 +121,7 @@ class SlotCache:
         if layer.conv_full is None:
             for li, t in self._alloc("conv", conv_states, self.lin_idx, conv_states.shape[1:]).items():
                 self.layers[li].conv_full = t
+            self.set_rows(self.B)
         if self.mode == "prefill":
             new = conv_states[0]  # last K inputs of the new tokens, zero-padded on the left if n_new < K
             if self.extending:
@@ -142,6 +139,7 @@ class SlotCache:
         if layer.rec_full is None:
             for li, t in self._alloc("rec", recurrent_states, self.lin_idx, recurrent_states.shape[1:]).items():
                 self.layers[li].rec_full = t
+            self.set_rows(self.B)
         if self.mode == "prefill":
             layer.rec_full[self.slot].copy_(recurrent_states[0])
             return layer.rec_full[self.slot:self.slot + 1]

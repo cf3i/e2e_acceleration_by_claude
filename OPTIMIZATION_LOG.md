@@ -15,6 +15,11 @@ Each entry: profile evidence → Amdahl estimate → change → measured result 
 | p1_s07_gqa_decode_attn | p1 | + GQA-folded GEMM decode attention | **21.4** | **474.8** | **3.52** | 0.9375 | 75% of roofline; GEMM 92% of step; decode 92% of e2e |
 | p2_s01_continuous_batching | p2 | slot cache + batch-32 decode graph + continuous runner | 30.4 ms/step (1.2 ms/tok amortized) | **60.8** | **27.5** | 0.9375 | ~25.5 live rows; prefill 46% / decode 40% / tool 13% |
 | p2_s02_prefix_reuse | p2 | + cross-turn extend + shared-prefix snapshot | same | 60.7 | 27.6 | 0.9375 | prefill tokens −89% but prefill time unchanged (~107 ms/call fixed) |
+| p2_s03_forced_prefill | p2 | + short suffixes fed as forced tokens through the decode graph | 30.1 ms/step | **46.7** | 35.8 | 0.9375 | prefill calls 256 → 7; 1222 steps; tool 17.7% |
+| p2_s04_async_tools | p2 | + tool calls in a thread pool; suspend/resume slot states | 30.1 ms/step | **38.7** | 43.2 | 0.9375 | tool fully overlapped; decode 95% |
+| p2_s05_inplace_state | p2 | + fla decode kernel writes recurrent state in place | 26.7 ms/step | **35.7** | 46.9 | 0.9375 | −3.2 ms/step state copy; GEMM 78% of step |
+| p2_s06_fp8 | p2 | + FP8 linears (torchao, per-row scales) | 23.05 ms/step | 32.2 | 52.0 | 0.9375 | CUTLASS rowwise GEMM slow at M=32 |
+| p2_s06t_fp8_tensor | p2 | FP8 with per-tensor scales (cuBLASLt) | **20.86 ms/step** | **28.6** | **58.5** | 0.9375 | GEMM 20.7 → 12.9 ms; kept |
 
 ## stage00_baseline
 - Profile: GPU busy 0.21; `_cudnn_attention_forward` 31% of CPU time (2.4 ms CPU / 13 µs GPU per call);
@@ -94,3 +99,24 @@ attention rewrite (1.19×), cuDNN-SDPA off (cold cliff), fla kernels (prefill 3.
   both ways. **Eager prefill is per-call (host) bound, not token bound**; the micro had shown it (105 ms @512 vs
   124 ms @1024). Measure p on the cost driver.
 - Next: short suffixes as forced tokens through the decode graph (sim: ~47.7 s).
+
+## p2_s03_forced_prefill — suffixes through the decode graph
+- Evidence: prefill 46%, ~107 ms per eager call regardless of length; suffixes are short (mean 70 / 26 tokens).
+- Change: `submit` queues the suffix; the graph feeds the queue head instead of the row's own output.
+- Estimate (step simulator): ~47.7 s. Result: **46.7 s**, prefill calls 256 → 7, steps 797 → 1222.
+- Next: tool 17.7% (inline tools block all rows).
+
+## p2_s04_async_tools — tool calls off the decode loop
+- Every replay updates all rows' linear states, so a waiting slot saves/restores its states (KV is safe).
+- Result: **38.7 s** (predicted 39.6), check_batch suspend/resume 8/8 identical; decode 95%.
+
+## p2_s05_inplace_state — no copy-back of recurrent states
+- Evidence: `triton_poi_fused_copy_` 3.2 ms (10.7%) of a 29.8 ms step. Change: launch the same fla kernel with
+  ht = h0 = cache buffer. Result: step 26.7 ms, **35.7 s**.
+
+## p2_s06 / p2_s06t — FP8 weights
+- Evidence: GEMM 78% of the step, bound by 54 GB of bf16 weights per step.
+- Result: per-row 32.2 s, per-tensor **28.6 s**, accuracy unchanged both. GEMM fell 1.6× (not 2×): at M=32 the
+  scale granularity picks the kernel (CUTLASS rowwise vs cuBLASLt), plus dynamic activation-quant kernels.
+- Next: makespan is now set as much by step *count* as step time — 16.9 live rows per step in a 32-row graph
+  (tail) and a ~1000-step longest chain → per-bucket graphs + compaction + 64 slots (sim ~22 s).

@@ -5,3 +5,4 @@ slurm/logs/
 *.sqlite
 results/**/torch_trace*.json
 runs/
+scratch/
