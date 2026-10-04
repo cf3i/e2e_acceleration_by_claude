@@ -158,7 +158,7 @@ p2_s10 的情况：
 ```bash
 slurm/submit.sh bench stage00_baseline --engine naive --runner serial
 slurm/submit.sh bench p2_s10_force_all --engine p2_s10 --runner continuous_async
-slurm/submit.sh profile p2_s10_force_all --engine p2_s10           # nsys + per-bucket timings
+slurm/submit.sh profile_batch p2_s10_force_all --engine p2_s10     # nsys + per-bucket timings
 slurm/submit.sh vllm ref_vllm_fp8 --quantization fp8               # vLLM venv: /mnt/data/u/feic/pjs/venvs/vllm
 python bench/report.py                                              # results/summary.csv
 ```
