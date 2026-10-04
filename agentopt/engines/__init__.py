@@ -20,6 +20,8 @@ PRESETS.update({
     "p2_s01": ("batch", {**_P1, "num_slots": 32}),                # continuous batching, 32 slots
     "p2_s02": ("batch", {**_P1, "num_slots": 32,                  # + cross-turn / shared-prefix state reuse
                          "prefix_reuse": True}),
+    "p2_s03": ("batch", {**_P1, "num_slots": 32,                  # + short suffixes fed through the decode graph
+                         "prefix_reuse": True, "force_max": 128}),
 })
 
 

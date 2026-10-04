@@ -4,6 +4,7 @@ run_serial     -- one task at a time, one turn at a time (phase 1; any engine wi
 run_continuous -- continuous batching (phase 2; BatchEngine): up to S agents in flight, one slot each. Every
                   loop iteration admits new tasks into free slots (prefill), runs ONE decode step for all slots,
                   and finishes turns whose row emitted a stop token (detokenize, tool call, next-turn prefill).
+                  With forced-token prefill a turn starts without a first token; it arrives from a later step.
 """
 import collections
 import time
@@ -61,10 +62,11 @@ def run_continuous(engine, tasks, timer, max_new_tokens: int = 512, max_turns: i
         with timer("template"):
             ids = tok.encode(st.prompt_text(tok), add_special_tokens=False)
         with timer("prefill") as t_pre:
-            first = engine.prefill(slot, ids)
-        live[slot] = {"st": st, "t_task": t_task, "ids": ids, "gen": [first], "prefill_s": t_pre.elapsed,
-                      "decode_s": 0.0, "limit": min(max_new_tokens, engine.room(len(ids)))}
-        if first in stop_ids or live[slot]["limit"] <= 1:
+            first = engine.submit(slot, ids)
+        live[slot] = {"st": st, "t_task": t_task, "ids": ids, "gen": [] if first is None else [first],
+                      "prefill_s": t_pre.elapsed, "decode_s": 0.0,
+                      "limit": min(max_new_tokens, engine.room(len(ids)))}
+        if first is not None and (first in stop_ids or live[slot]["limit"] <= 1):
             finish_turn(slot)
 
     def finish_turn(slot):
@@ -106,8 +108,10 @@ def run_continuous(engine, tasks, timer, max_new_tokens: int = 512, max_turns: i
         share = t_dec.elapsed / len(live)  # amortized decode time per live sequence
         for slot in list(live):
             run = live[slot]
-            run["gen"].append(out[slot])
             run["decode_s"] += share
+            if slot not in out:  # still consuming its forced suffix
+                continue
+            run["gen"].append(out[slot])
             if out[slot] in stop_ids or len(run["gen"]) >= run["limit"]:
                 finish_turn(slot)
     return results, turns

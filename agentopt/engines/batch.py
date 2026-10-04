@@ -2,7 +2,9 @@
 
 API used by the continuous runner:
     prefill(slot, ids) -> first token     batch-1 prefill of one sequence into its slot (eager)
-    step() -> list[int] (one per slot)     one decode step for ALL slots: one CUDA-graph replay
+    submit(slot, ids) -> first token|None  start a turn: eager prefill, or (force_max) queue a short suffix
+    step() -> {slot: token}                one decode step for ALL slots: one CUDA-graph replay; returns the
+                                           new token of every row that is generating (not consuming a suffix)
     release(slot)                          park the row (its outputs are ignored from now on)
 
 The decode step is the phase-1 recipe (compiled forward + GQA-folded decode attention, captured in one CUDA
@@ -15,7 +17,15 @@ Prefix reuse (optional, `prefix_reuse`): the engine remembers which tokens each 
 every token fed by decode). A prefill whose ids start with those tokens only processes the new suffix (agent
 turn k+1 = turn k + its answer + the tool result). A fresh slot whose ids start with the registered shared prefix
 (system prompt + tool schema, `set_shared_prefix`) gets that prefix's state copied in and prefills the rest.
+
+Forced-token prefill (optional, `force_max`): an eager batch-1 prefill costs ~105 ms per call almost regardless
+of length (host-bound, 64 layers of HF dispatch + Triton launches) and stalls every other row. A reusable suffix
+of at most `force_max` tokens is instead fed through the decode graph one token per step: the graph takes the
+row's input from a forced-token buffer (filled by the host before each replay) instead of its last output, and
+the row's outputs are ignored until the last suffix token has been fed. Same state update as decoding, no
+extra call, the other rows keep decoding.
 """
+import collections
 import os
 import time
 
@@ -27,10 +37,11 @@ from .slot_cache import SlotCache
 
 class BatchEngine(NaiveEngine):
     def __init__(self, num_slots: int = 32, max_len: int = 2048, compile_decode: bool = True,
-                 gqa_decode_attn: bool = True, prefix_reuse: bool = False, **kw):
+                 gqa_decode_attn: bool = True, prefix_reuse: bool = False, force_max: int = 0, **kw):
         super().__init__(**kw)
         self.options.update(num_slots=num_slots, max_len=max_len, compile_decode=compile_decode,
-                            gqa_decode_attn=gqa_decode_attn, prefix_reuse=prefix_reuse)
+                            gqa_decode_attn=gqa_decode_attn, prefix_reuse=prefix_reuse, force_max=force_max)
+        assert prefix_reuse or not force_max, "forced-token prefill only feeds suffixes of reusable state"
         if gqa_decode_attn:
             from .decode_attention import install
             install(self.model)
@@ -50,6 +61,8 @@ class BatchEngine(NaiveEngine):
         self.rows = torch.arange(S, device=dev)
         self.trues = torch.ones((S,), dtype=torch.bool, device=dev)  # device-side value: no H2D copy in capture
         self.host_buf = torch.zeros((S,), dtype=torch.long, pin_memory=True)
+        self.force_dev = torch.zeros((2, S), dtype=torch.long, device=dev)  # [token, on] per row, read in-graph
+        self.force_host = torch.zeros((2, S), dtype=torch.long, pin_memory=True)
         self.event = torch.cuda.Event()
         self.cache = SlotCache(self.model.config, S, max_len, self.pos_buf)
         self.prefix_reuse = prefix_reuse
@@ -59,6 +72,8 @@ class BatchEngine(NaiveEngine):
         self.slot_tokens = [None] * S  # tokens whose state slot s holds (None = nothing reusable)
         self.next_tok = [None] * S     # token the next decode step feeds into slot s
         self.live = set()
+        self.force_max = force_max
+        self.force_q = [collections.deque() for _ in range(S)]  # suffix tokens still to feed into slot s
         self.shared = None             # (tokens, snapshot) of the shared prefix
         self.reset_stats()
         t0 = time.perf_counter()
@@ -68,7 +83,8 @@ class BatchEngine(NaiveEngine):
 
     def _step(self):
         self.mask_buf.view(self.num_slots, self.max_len).index_put_((self.rows, self.pos_buf), self.trues)
-        out = self.decode_model(input_ids=self.tok_buf, position_ids=self.pos_buf.view(-1, 1),
+        tok = torch.where(self.force_dev[1].view(-1, 1) > 0, self.force_dev[0].view(-1, 1), self.tok_buf)
+        out = self.decode_model(input_ids=tok, position_ids=self.pos_buf.view(-1, 1),
                                 attention_mask=self.mask_buf, past_key_values=self.cache, use_cache=True)
         self.out_buf.copy_(out.logits[:, -1].argmax(-1))
         self.tok_buf.copy_(self.out_buf.view(-1, 1))
@@ -93,6 +109,7 @@ class BatchEngine(NaiveEngine):
 
     def reset_stats(self):
         self.stats = {"prefill_calls": 0, "prefill_tokens": 0, "reused_turn": 0, "reused_shared": 0,
+                      "forced_tokens": 0,
                       "decode_steps": 0, "live_row_steps": 0}
 
     @staticmethod
@@ -135,7 +152,38 @@ class BatchEngine(NaiveEngine):
         self.live.add(slot)
         return next_id
 
+    @torch.inference_mode()
+    def submit(self, slot: int, input_ids: list[int]):
+        """Start a turn on `slot`. Returns the first generated token (eager prefill) or None (the suffix is
+        queued as forced tokens; the first generated token comes out of a later step())."""
+        if not self.force_max:
+            return self.prefill(slot, input_ids)
+        n = len(input_ids)
+        assert n < self.park, "prompt exceeds max_len"
+        if self._is_prefix(self.slot_tokens[slot], input_ids):
+            start = len(self.slot_tokens[slot])  # slot state, mask and position already end at `start`
+            kind = "reused_turn"
+        elif self.shared is not None and self._is_prefix(self.shared[0], input_ids):
+            start, kind = len(self.shared[0]), "reused_shared"
+        else:
+            return self.prefill(slot, input_ids)
+        if n - start > self.force_max:
+            return self.prefill(slot, input_ids)
+        if kind == "reused_shared":
+            self.cache.restore(slot, self.shared[1])
+            self.mask_buf[slot].zero_()
+            self.mask_buf[slot, ..., :start] = True
+            self.pos_buf[slot] = start
+            self.slot_tokens[slot] = list(input_ids[:start])
+        self.stats[kind] += start
+        self.stats["forced_tokens"] += n - start
+        self.force_q[slot] = collections.deque(input_ids[start:])
+        self.next_tok[slot] = None
+        self.live.add(slot)
+        return None
+
     def release(self, slot: int):
+        self.force_q[slot].clear()
         self.mask_buf[slot].zero_()
         self.pos_buf[slot] = self.park
         self.live.discard(slot)
@@ -146,7 +194,13 @@ class BatchEngine(NaiveEngine):
         return self.park - slot_len
 
     @torch.inference_mode()
-    def step(self) -> list[int]:
+    def step(self) -> dict[int, int]:
+        forcing = [s for s in self.live if self.force_q[s]]
+        if forcing or self.force_host[1].any():
+            self.force_host.zero_()
+            for s in forcing:
+                self.force_host[0, s], self.force_host[1, s] = self.force_q[s][0], 1
+            self.force_dev.copy_(self.force_host, non_blocking=True)  # host buffer reused only after the sync
         self.graph.replay()
         self.host_buf.copy_(self.out_buf, non_blocking=True)
         self.event.record()
@@ -154,10 +208,13 @@ class BatchEngine(NaiveEngine):
         out = self.host_buf.tolist()
         self.stats["decode_steps"] += 1
         self.stats["live_row_steps"] += len(self.live)
-        for s in self.live:  # the step fed next_tok[s] into slot s
-            self.slot_tokens[s].append(self.next_tok[s])
-            self.next_tok[s] = out[s]
-        return out
+        emitted = {}
+        for s in self.live:  # the step fed the head of the forced queue, else next_tok[s], into slot s
+            q = self.force_q[s]
+            self.slot_tokens[s].append(q.popleft() if q else self.next_tok[s])
+            if not q:
+                self.next_tok[s] = emitted[s] = out[s]
+        return emitted
 
     @torch.inference_mode()
     def generate(self, input_ids: list[int], max_new_tokens: int, timer, ignore_eos: bool = False):
