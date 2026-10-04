@@ -142,6 +142,7 @@ class BatchEngine(NaiveEngine):
             self.release(slot)
 
     # --- live-row compaction (logical slot <-> physical row) ---
+    @torch.inference_mode()  # the cache tensors are inference tensors; release() may run outside the mode
     def _swap(self, a: int, b: int):
         self.cache.swap_rows(a, b)
         for buf in (self.mask_buf, self.pos_buf, self.tok_buf):

@@ -13,16 +13,16 @@
     "fp8": true
   },
   "num_slots": 32,
-  "step_ms": 22.901132814586163,
+  "step_ms": 23.048232421278954,
   "steps": 100,
   "peak_mem_gb": 55.015438336,
   "env": {
-    "host": "orix-worker-h100-0",
-    "slurm_job_id": "297223",
+    "host": "orix-worker-h100-5",
+    "slurm_job_id": "297226",
     "gpu": "NVIDIA H100 80GB HBM3",
     "torch": "2.11.0+cu128",
     "transformers": "5.5.4",
-    "git_commit": "abb11386647a91fe591b8e5f097735d1713925ff",
+    "git_commit": "767697b1f5e8e5ce94255ea2fc6160b98ca99f0e",
     "snapshot": true,
     "git_dirty": false,
     "argv": [
