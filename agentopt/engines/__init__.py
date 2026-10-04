@@ -22,6 +22,8 @@ PRESETS.update({
                          "prefix_reuse": True}),
     "p2_s03": ("batch", {**_P1, "num_slots": 32,                  # + short suffixes fed through the decode graph
                          "prefix_reuse": True, "force_max": 128}),
+    "p2_s05": ("batch", {**_P1, "num_slots": 32,                  # + decode writes recurrent states in place
+                         "prefix_reuse": True, "force_max": 128, "inplace_state": True}),
 })
 
 

@@ -44,10 +44,12 @@ from .slot_cache import SlotCache
 
 class BatchEngine(NaiveEngine):
     def __init__(self, num_slots: int = 32, max_len: int = 2048, compile_decode: bool = True,
-                 gqa_decode_attn: bool = True, prefix_reuse: bool = False, force_max: int = 0, **kw):
+                 gqa_decode_attn: bool = True, prefix_reuse: bool = False, force_max: int = 0,
+                 inplace_state: bool = False, **kw):
         super().__init__(**kw)
         self.options.update(num_slots=num_slots, max_len=max_len, compile_decode=compile_decode,
-                            gqa_decode_attn=gqa_decode_attn, prefix_reuse=prefix_reuse, force_max=force_max)
+                            gqa_decode_attn=gqa_decode_attn, prefix_reuse=prefix_reuse, force_max=force_max,
+                            inplace_state=inplace_state)
         assert prefix_reuse or not force_max, "forced-token prefill only feeds suffixes of reusable state"
         if gqa_decode_attn:
             from .decode_attention import install
@@ -76,6 +78,9 @@ class BatchEngine(NaiveEngine):
         if prefix_reuse:
             from .hybrid_prefill import install as install_extend
             install_extend(self.model, self.cache)
+        if inplace_state:
+            from .inplace_state import install as install_inplace
+            install_inplace(self.model, self.cache)
         self.slot_tokens = [None] * S  # tokens whose state slot s holds (None = nothing reusable)
         self.next_tok = [None] * S     # token the next decode step feeds into slot s
         self.live = set()

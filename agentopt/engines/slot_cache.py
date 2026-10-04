@@ -42,6 +42,7 @@ class SlotCache:
         self.values = [None] * len(self.layer_types)
         self.mode, self.slot, self.start, self.n_new = "decode", 0, 0, 0
         self.prev_conv = None  # extend mode: the slot's conv window before this prefill (current layer)
+        self.recurrent_inplace = False  # decode kernel already wrote the new states into our buffers
 
     # --- mode switches (host side, outside the captured graph) ---
     def begin_prefill(self, slot: int, start: int = 0, n_new: int = 0):
@@ -104,7 +105,8 @@ class SlotCache:
         if self.mode == "prefill":
             layer.recurrent_states[self.slot].copy_(recurrent_states[0])
             return layer.recurrent_states[self.slot:self.slot + 1]
-        layer.recurrent_states.copy_(recurrent_states)
+        if not self.recurrent_inplace:
+            layer.recurrent_states.copy_(recurrent_states)
         return layer.recurrent_states
 
     # --- snapshots (shared prefix) ---
