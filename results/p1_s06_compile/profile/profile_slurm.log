@@ -1,0 +1,258 @@
+== torch.profiler
+Loading weights:   0%|          | 0/851 [00:00<?, ?it/s]Loading weights:   6%|▋         | 54/851 [00:00<00:01, 532.51it/s]Loading weights:  13%|█▎        | 108/851 [00:00<00:02, 336.28it/s]Loading weights:  17%|█▋        | 146/851 [00:00<00:02, 350.98it/s]Loading weights:  22%|██▏       | 184/851 [00:00<00:01, 351.80it/s]Loading weights:  26%|██▌       | 221/851 [00:00<00:01, 357.51it/s]Loading weights:  30%|███       | 258/851 [00:00<00:01, 313.46it/s]Loading weights:  34%|███▍      | 291/851 [00:00<00:01, 310.03it/s]Loading weights:  39%|███▉      | 336/851 [00:00<00:01, 330.61it/s]Loading weights:  43%|████▎     | 370/851 [00:01<00:01, 330.75it/s]Loading weights:  47%|████▋     | 404/851 [00:01<00:01, 292.70it/s]Loading weights:  53%|█████▎    | 450/851 [00:01<00:01, 334.50it/s]Loading weights:  57%|█████▋    | 485/851 [00:01<00:01, 306.40it/s]Loading weights:  61%|██████    | 517/851 [00:01<00:01, 303.28it/s]Loading weights:  65%|██████▍   | 549/851 [00:01<00:01, 278.73it/s]Loading weights:  70%|██████▉   | 594/851 [00:01<00:00, 303.06it/s]Loading weights:  75%|███████▌  | 642/851 [00:01<00:00, 344.92it/s]Loading weights:  80%|████████  | 682/851 [00:02<00:00, 327.72it/s]Loading weights:  85%|████████▌ | 727/851 [00:02<00:00, 357.07it/s]Loading weights:  90%|████████▉ | 764/851 [00:02<00:00, 345.73it/s]Loading weights:  94%|█████████▍| 800/851 [00:02<00:00, 333.05it/s]Loading weights:  98%|█████████▊| 834/851 [00:02<00:00, 305.18it/s]Loading weights: 100%|██████████| 851/851 [00:02<00:00, 331.01it/s]
+decode graph captured in 35.9s (compile=True)
+/mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torch/profiler/profiler.py:224: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+{
+  "profiled_tasks": 1,
+  "wall_s_with_profiler": 4.293690159916878,
+  "gpu_kernel_busy_s": 3.930644297000117,
+  "gpu_busy_ratio": 0.9154466555817364,
+  "kernels": 236749,
+  "gen_tokens": 151,
+  "kernels_per_generated_token": 1567.8741721854306,
+  "breakdown_with_profiler": {
+    "decode": {
+      "seconds": 3.904127661138773,
+      "count": 2,
+      "frac": 0.9092709337961065
+    },
+    "prefill": {
+      "seconds": 0.3204112872481346,
+      "count": 2,
+      "frac": 0.07462375609662936
+    },
+    "tool": {
+      "seconds": 0.06180208548903465,
+      "count": 1,
+      "frac": 0.014393699402434545
+    },
+    "template": {
+      "seconds": 0.005814069882035255,
+      "count": 2,
+      "frac": 0.0013540962821005722
+    },
+    "other": {
+      "seconds": 0.0011896565556526184,
+      "count": 0,
+      "frac": 0.000277070890386662
+    },
+    "detokenize": {
+      "seconds": 0.0003453996032476425,
+      "count": 2,
+      "frac": 8.0443532342429e-05
+    }
+  }
+}
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                      nvjet_tst_192x8_64x8_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us        1.188s        30.21%        1.188s      60.638us         19584  
+                      nvjet_tst_64x8_64x16_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us        1.134s        28.85%        1.134s      38.597us         29376  
+fmha_cutlassF_bf16_aligned_32x128_gmem_sm80(PyTorchM...         0.00%       0.000us         0.00%       0.000us       0.000us     595.796ms        15.16%     595.796ms     240.240us          2480  
+                     nvjet_tst_128x8_64x12_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us     273.007ms         6.95%     273.007ms      37.174us          7344  
+                      nvjet_tst_512x8_64x3_2x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us     129.939ms         3.31%     129.939ms     838.316us           155  
+triton_poi_fused__scaled_dot_product_efficient_atten...         0.00%       0.000us         0.00%       0.000us       0.000us      95.492ms         2.43%      95.492ms      19.504us          4896  
+                                               aten::mm         1.21%      50.383ms         1.45%      60.388ms      60.752us      72.335ms         1.84%      72.797ms      73.236us           994  
+               nvjet_tst_64x8_64x16_1x1_v_bz_splitK_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      70.835ms         1.80%      70.835ms       4.823us         14688  
+     triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0         0.00%       0.000us         0.00%       0.000us       0.000us      42.054ms         1.07%      42.054ms       2.432us         17289  
+void cublasLt::splitKreduce_kernel<32, 16, int, floa...         0.00%       0.000us         0.00%       0.000us       0.000us      35.662ms         0.91%      35.662ms       1.803us         19776  
+            fused_recurrent_gated_delta_rule_fwd_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      34.797ms         0.89%      34.797ms       4.738us          7344  
+               nvjet_tst_64x8_64x16_4x1_v_bz_splitK_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      30.932ms         0.79%      30.932ms       6.318us          4896  
+void causal_conv1d_update_kernel<Causal_conv1d_updat...         0.00%       0.000us         0.00%       0.000us       0.000us      25.347ms         0.64%      25.347ms       3.451us          7344  
+                          triton_poi_fused_copy_copy__4         0.00%       0.000us         0.00%       0.000us       0.000us      20.838ms         0.53%      20.838ms       2.837us          7344  
+              nvjet_tst_384x104_64x3_2x1_v_bz_coopA_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      20.487ms         0.52%      20.487ms     160.055us           128  
+                            layer_norm_gated_fwd_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      18.917ms         0.48%      18.917ms       2.543us          7440  
+                    nvjet_tst_192x104_64x5_1x2_h_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      15.815ms         0.40%      15.815ms      89.858us           176  
+                     aten::_efficient_attention_forward         0.01%     345.086us         0.02%     928.717us      29.022us      14.627ms         0.37%      14.627ms     457.084us            32  
+                    nvjet_tst_128x176_64x5_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      14.335ms         0.36%      14.335ms      81.449us           176  
+               triton_poi_fused__unsafe_view_mul_silu_1         0.00%       0.000us         0.00%       0.000us       0.000us      12.807ms         0.33%      12.807ms       1.744us          7344  
+                                            aten::copy_         0.23%       9.794ms         0.58%      24.089ms      12.062us      12.476ms         0.32%      12.476ms       6.247us          1997  
+triton_poi_fused__to_copy__unsafe_view_add_clone_emp...         0.00%       0.000us         0.00%       0.000us       0.000us      11.872ms         0.30%      11.872ms       1.617us          7344  
+triton_poi_fused__to_copy__unsafe_view_add_clone_emp...         0.00%       0.000us         0.00%       0.000us       0.000us      11.452ms         0.29%      11.452ms       1.559us          7344  
+                    triton_poi_fused__unsafe_view_add_2         0.00%       0.000us         0.00%       0.000us       0.000us      11.256ms         0.29%      11.256ms       1.533us          7344  
+triton_poi_fused__to_copy__unsafe_view_add_clone_emp...         0.00%       0.000us         0.00%       0.000us       0.000us       9.690ms         0.25%       9.690ms       1.319us          7344  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 4.171s
+Self CUDA time total: 3.931s
+
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                   cudaEventSynchronize        86.33%        3.600s        86.33%        3.600s      23.844ms       0.000us         0.00%       0.000us       0.000us           151  
+                                        cudaGraphLaunch         5.05%     210.586ms         5.56%     231.983ms       1.516ms       0.000us         0.00%       0.000us       0.000us           153  
+                            ChunkGatedDeltaRuleFunction         1.64%      68.553ms         2.00%      83.234ms     867.023us       6.876ms         0.17%       8.000ms      83.330us            96  
+                                  cudaDeviceSynchronize         1.22%      51.059ms         1.22%      51.059ms       4.642ms       0.000us         0.00%       0.000us       0.000us            11  
+                                               aten::mm         1.21%      50.383ms         1.45%      60.388ms      60.752us      72.335ms         1.84%      72.797ms      73.236us           994  
+                                       cudaLaunchKernel         0.83%      34.476ms         0.83%      34.476ms       5.278us       0.000us         0.00%       0.000us       0.000us          6532  
+                                Activity Buffer Request         0.61%      25.276ms         0.61%      25.276ms       1.944ms     123.521us         0.00%     123.521us       9.502us            13  
+                                 LayerNormGatedFunction         0.30%      12.668ms         0.35%      14.417ms     150.178us     569.247us         0.01%     569.247us       5.930us            96  
+                                       cuLaunchKernelEx         0.26%      10.830ms         0.27%      11.113ms       6.307us       0.000us         0.00%     338.497us       0.192us          1762  
+                                            aten::copy_         0.23%       9.794ms         0.58%      24.089ms      12.062us      12.476ms         0.32%      12.476ms       6.247us          1997  
+                                           Buffer Flush         0.23%       9.574ms         0.23%       9.693ms     646.192us       6.751us         0.00%       6.751us       0.450us            15  
+                                    aten::empty_strided         0.16%       6.721ms         0.16%       6.721ms       3.311us       0.000us         0.00%       0.000us       0.000us          2030  
+                                              aten::add         0.16%       6.651ms         0.29%      12.065ms      10.988us       3.090ms         0.08%       3.090ms       2.814us          1098  
+                                              aten::mul         0.13%       5.369ms         0.25%      10.320ms      10.000us       7.571ms         0.19%       7.571ms       7.336us          1032  
+                                        cudaMemcpyAsync         0.13%       5.237ms         0.13%       5.237ms      14.922us       0.000us         0.00%       0.000us       0.000us           351  
+                       DaoAILab::_causal_conv1d_fwd_cpp         0.12%       4.992ms         0.14%       5.742ms      59.816us     867.902us         0.02%     867.902us       9.041us            96  
+                                            aten::empty         0.11%       4.399ms         0.11%       4.399ms       3.239us       0.000us         0.00%       0.000us       0.000us          1358  
+                                         CausalConv1dFn         0.10%       4.091ms         0.25%      10.301ms     107.300us       0.000us         0.00%     867.902us       9.041us            96  
+                                             aten::mean         0.08%       3.165ms         0.12%       4.870ms      15.125us       3.459ms         0.09%       3.459ms      10.741us           322  
+                                              aten::pow         0.07%       2.824ms         0.12%       4.835ms      15.016us       1.560ms         0.04%       1.560ms       4.843us           322  
+                                           aten::matmul         0.07%       2.804ms         1.56%      65.077ms      65.339us       0.000us         0.00%      72.804ms      73.097us           996  
+                                         aten::_to_copy         0.06%       2.526ms         0.40%      16.688ms      14.312us       0.000us         0.00%       5.332ms       4.573us          1166  
+                                       aten::as_strided         0.05%       2.219ms         0.05%       2.219ms       0.632us       0.000us         0.00%       0.000us       0.000us          3513  
+                                  cudaStreamSynchronize         0.05%       2.165ms         0.05%       2.165ms     541.141us       0.000us         0.00%       0.000us       0.000us             4  
+                                          aten::reshape         0.05%       2.115ms         0.11%       4.712ms       2.255us       0.000us         0.00%       3.730ms       1.785us          2090  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 4.171s
+Self CUDA time total: 3.931s
+
+== nsys
+WARNING: Device-side CUDA Event completion trace is currently enabled.
+         This may increase runtime overhead and the likelihood of false
+         dependencies across CUDA Streams. If you wish to avoid this, please
+         disable the feature with --cuda-event-trace=false.
+Loading weights:   0%|          | 0/851 [00:00<?, ?it/s]Loading weights:  78%|███████▊  | 664/851 [00:00<00:00, 6632.20it/s]Loading weights: 100%|██████████| 851/851 [00:00<00:00, 7017.58it/s]
+decode graph captured in 35.6s (compile=True)
+engine loaded in 60.9s
+[rep 0] makespan=17.4s acc=1.000 gen_tok=607 decode=26.32ms/tok
+{
+  "stage": "p1_s06_compile",
+  "engine": "p1_s06",
+  "engine_options": {
+    "linear_attn_fast_path": true,
+    "cudnn_sdpa": false,
+    "static_cache": true,
+    "max_cache_len": 4096,
+    "cuda_graph": true,
+    "async_readback": true,
+    "compile_decode": true
+  },
+  "runner": "serial",
+  "config": {
+    "engine": "p1_s06",
+    "runner": "serial",
+    "num_tasks": 4,
+    "repeats": 1,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "device": "cuda"
+  },
+  "load_s": 60.90440269000828,
+  "makespan_s_all": [
+    17.419857516884804
+  ],
+  "makespan_s": 17.419857516884804,
+  "tasks": 4,
+  "accuracy": 1.0,
+  "tasks_per_min": 13.777380197706648,
+  "turns": 8,
+  "tool_calls": 4,
+  "gen_tokens": 607,
+  "prompt_tokens": 3877,
+  "redundant_prefill_tokens": 2128,
+  "gen_tok_per_s_e2e": 34.845290750033065,
+  "decode_ms_per_token": 26.31804926977034,
+  "prefill_tok_per_s": 3343.7232537878285,
+  "task_latency_p50_s": 4.530111327767372,
+  "task_latency_p90_s": 6.275842910632491,
+  "finish_reasons": {
+    "answer": 4
+  },
+  "peak_mem_gb": 50.68537664413452
+}
+breakdown (median rep):
+  decode           15.76s   90.5%  n=8
+  prefill           1.16s    6.7%  n=8
+  tool              0.48s    2.7%  n=4
+  template          0.02s    0.1%  n=8
+  other             0.00s    0.0%  n=0
+  detokenize        0.00s    0.0%  n=8
+Collecting data...
+Generating '/home/feic/.cache/codex-tmp/nsys-report-0b0b.qdstrm'
+[1/1] [0%                          ] nsys.nsys-rep[1/1] [0%                          ] nsys.nsys-rep[1/1] [5%                          ] nsys.nsys-rep[1/1] [6%                          ] nsys.nsys-rep[1/1] [0%                          ] nsys.nsys-rep[1/1] [5%                          ] nsys.nsys-rep[1/1] [6%                          ] nsys.nsys-rep[1/1] [7%                          ] nsys.nsys-rep[1/1] [8%                          ] nsys.nsys-rep[1/1] [9%                          ] nsys.nsys-rep[1/1] [10%                         ] nsys.nsys-rep[1/1] [11%                         ] nsys.nsys-rep[1/1] [12%                         ] nsys.nsys-rep[1/1] [13%                         ] nsys.nsys-rep[1/1] [14%                         ] nsys.nsys-rep[1/1] [=15%                        ] nsys.nsys-rep[1/1] [=16%                        ] nsys.nsys-rep[1/1] [=17%                        ] nsys.nsys-rep[1/1] [==18%                       ] nsys.nsys-rep[1/1] [==19%                       ] nsys.nsys-rep[1/1] [==20%                       ] nsys.nsys-rep[1/1] [==21%                       ] nsys.nsys-rep[1/1] [===22%                      ] nsys.nsys-rep[1/1] [===23%                      ] nsys.nsys-rep[1/1] [===24%                      ] nsys.nsys-rep[1/1] [====25%                     ] nsys.nsys-rep[1/1] [====26%                     ] nsys.nsys-rep[1/1] [====27%                     ] nsys.nsys-rep[1/1] [====28%                     ] nsys.nsys-rep[1/1] [=====29%                    ] nsys.nsys-rep[1/1] [=====30%                    ] nsys.nsys-rep[1/1] [=====31%                    ] nsys.nsys-rep[1/1] [=====32%                    ] nsys.nsys-rep[1/1] [======33%                   ] nsys.nsys-rep[1/1] [======34%                   ] nsys.nsys-rep[1/1] [======35%                   ] nsys.nsys-rep[1/1] [=======36%                  ] nsys.nsys-rep[1/1] [=======37%                  ] nsys.nsys-rep[1/1] [=======38%                  ] nsys.nsys-rep[1/1] [=======39%                  ] nsys.nsys-rep[1/1] [========40%                 ] nsys.nsys-rep[1/1] [========41%                 ] nsys.nsys-rep[1/1] [========42%                 ] nsys.nsys-rep[1/1] [=========43%                ] nsys.nsys-rep[1/1] [=========44%                ] nsys.nsys-rep[1/1] [=========45%                ] nsys.nsys-rep[1/1] [=========46%                ] nsys.nsys-rep[1/1] [==========47%               ] nsys.nsys-rep[1/1] [==========48%               ] nsys.nsys-rep[1/1] [==========49%               ] nsys.nsys-rep[1/1] [===========50%              ] nsys.nsys-rep[1/1] [===========51%              ] nsys.nsys-rep[1/1] [===========52%              ] nsys.nsys-rep[1/1] [========================100%] nsys.nsys-rep[1/1] [========================100%] nsys.nsys-rep
+Generated:
+	/mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/runs/p1_s06_compile-profile-90d7256-1004-154542/results/p1_s06_compile/profile/nsys.nsys-rep
+
+## NVTX ranges (L1 sections): total 22.04s over 45 instances
+ time%   total_s     count    avg_us  name
+  90.4    19.918        10 1991820.2  :decode
+   6.7     1.468        10  146819.3  :prefill
+   2.8     0.607         5  121453.2  :tool
+   0.2     0.047        10    4692.0  :template
+   0.0     0.002        10     198.9  :detokenize
+
+## GPU kernels: total 20.13s over 1204142 instances
+ time%   total_s     count    avg_us  name
+  30.1     6.068     99840      60.8  nvjet_tst_192x8_64x8_4x1_v_bz_TNT
+  29.2     5.870    149760      39.2  nvjet_tst_64x8_64x16_4x1_v_bz_TNT
+  15.1     3.037     12656     239.9  fmha_cutlassF_bf16_aligned_32x128_gmem_sm80(PyTorchMemEffAttention::AttentionKernel<cutlass::bfloat16_t, cutla
+   6.9     1.388     37440      37.1  nvjet_tst_128x8_64x12_4x1_v_bz_TNT
+   3.3     0.663       791     837.8  nvjet_tst_512x8_64x3_2x1_v_bz_TNT
+   2.4     0.490     24960      19.6  triton_poi_fused__scaled_dot_product_efficient_attention__unsafe_view_clone_expand_scalar_tensor_unsqueeze_whe
+   1.8     0.361     74880       4.8  nvjet_tst_64x8_64x16_1x1_v_bz_splitK_TNT
+   1.1     0.218     88140       2.5  triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0
+   0.9     0.185    100928       1.8  void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)0,
+   0.9     0.177     37440       4.7  fused_recurrent_gated_delta_rule_fwd_kernel
+   0.8     0.158     24960       6.3  nvjet_tst_64x8_64x16_4x1_v_bz_splitK_TNT
+   0.6     0.128     37440       3.4  void causal_conv1d_update_kernel<Causal_conv1d_update_kernel_traits<(int)64, (int)4, c10::BFloat16, c10::BFloa
+   0.5     0.105     37440       2.8  triton_poi_fused_copy_copy__4
+   0.5     0.091     37968       2.4  layer_norm_gated_fwd_kernel
+   0.3     0.066     37440       1.7  triton_poi_fused__unsafe_view_mul_silu_1
+   0.3     0.059     37440       1.6  triton_poi_fused__to_copy__unsafe_view_add_clone_empty_like_exp_expand_mul_neg_sigmoid_softplus_split_with_siz
+   0.3     0.051     37440       1.4  triton_poi_fused__unsafe_view_add_2
+   0.2     0.049     37440       1.3  triton_poi_fused__to_copy__unsafe_view_add_clone_empty_like_exp_expand_mul_neg_sigmoid_softplus_split_with_siz
+   0.2     0.049     37440       1.3  triton_poi_fused__to_copy__unsafe_view_add_clone_empty_like_exp_expand_mul_neg_sigmoid_softplus_split_with_siz
+   0.2     0.049       576      85.3  nvjet_tst_192x104_64x5_1x2_h_bz_TNT
+   0.2     0.048     37440       1.3  triton_poi_fused__to_copy__unsafe_view_add_clone_empty_like_exp_expand_mul_neg_sigmoid_softplus_split_with_siz
+   0.2     0.044       384     113.8  nvjet_tst_192x144_64x5_1x2_h_bz_coopB_TNT
+   0.2     0.043       528      81.7  nvjet_tst_128x176_64x5_4x1_v_bz_TNT
+   0.2     0.037     12480       3.0  triton_red_fused__to_copy__unsafe_view_add_mean_mul_pow_rsqrt_11
+   0.2     0.033      2112      15.8  void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::dire
+
+## CUDA API (host side): total 29.36s over 81602 instances
+ time%   total_s     count    avg_us  name
+  61.3    17.990       767   23455.4  cudaEventSynchronize
+  28.5     8.375      2795    2996.4  cudaMemcpyAsync
+   5.3     1.558       777    2005.5  cudaGraphLaunch_v10000
+   1.6     0.480     36940      13.0  cudaLaunchKernel
+   1.4     0.412       464     888.9  cudaMalloc
+   0.9     0.257        47    5472.1  cudaDeviceSynchronize
+   0.3     0.083     12063       6.9  cuLaunchKernelEx
+   0.2     0.066       488     134.5  cuModuleLoad
+   0.1     0.043        54     802.7  cuLibraryLoadData
+   0.1     0.023       915      25.5  cudaStreamSynchronize
+   0.1     0.019      2768       6.7  cuLaunchKernel
+   0.0     0.010         1    9853.6  cudaGraphInstantiateWithFlags_v11040
+
+## GPU memcpy/memset: total 8.27s over 7729 instances
+ time%   total_s     count    avg_us  name
+  99.9     8.265       904    9142.3  [CUDA memcpy Host-to-Device]
+   0.1     0.005      3431       1.4  [CUDA memcpy Device-to-Device]
+   0.0     0.002      2606       0.8  [CUDA memset]
+   0.0     0.002       788       2.3  [CUDA memcpy Device-to-Host]
+
+## CUDA-graph kernels: 777 replays, 1485 kernels/replay, 24.94 ms GPU time/replay
+  GEMM                            75.5%   18.82 ms/replay     626 kernels/replay  avg   30.1 us
+  attention                       17.8%    4.45 ms/replay      64 kernels/replay  avg   69.5 us
+  triton (inductor)                4.6%    1.14 ms/replay     644 kernels/replay  avg    1.8 us
+  fla/conv1d                       2.0%    0.50 ms/replay     144 kernels/replay  avg    3.5 us
+  torch elementwise/copy/other     0.0%    0.01 ms/replay       6 kernels/replay  avg    1.8 us
+  torch reduce                     0.0%    0.01 ms/replay       1 kernels/replay  avg    8.6 us
+ time%  us/replay  n/replay   avg_us  name
+  31.2     7779.4       128     60.8  nvjet_tst_192x8_64x8_4x1_v_bz_TNT
+  30.2     7525.1       192     39.2  nvjet_tst_64x8_64x16_4x1_v_bz_TNT
+  15.2     3796.1        16    237.3  fmha_cutlassF_bf16_aligned_32x128_gmem_sm80
+   7.1     1779.0        48     37.1  nvjet_tst_128x8_64x12_4x1_v_bz_TNT
+   3.4      837.7         1    837.7  nvjet_tst_512x8_64x3_2x1_v_bz_TNT
+   2.5      627.8        32     19.6  triton_poi_fused__scaled_dot_product_efficient_attention__unsafe_view_clone_expand_scalar_
+   1.9      462.9        96      4.8  nvjet_tst_64x8_64x16_1x1_v_bz_splitK_TNT
+   1.1      280.0       113      2.5  triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0
+   0.9      234.6       128      1.8  splitKreduce_kernel
+   0.9      226.3        48      4.7  fused_recurrent_gated_delta_rule_fwd_kernel
+   0.8      201.9        32      6.3  nvjet_tst_64x8_64x16_4x1_v_bz_splitK_TNT
+   0.7      164.6        48      3.4  causal_conv1d_update_kernel
+   0.5      134.7        48      2.8  triton_poi_fused_copy_copy__4
+   0.5      112.6        48      2.3  layer_norm_gated_fwd_kernel
+   0.3       83.9        48      1.7  triton_poi_fused__unsafe_view_mul_silu_1

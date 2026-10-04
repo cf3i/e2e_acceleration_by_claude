@@ -1,0 +1,82 @@
+
+## NVTX ranges (L1 sections): total 22.04s over 45 instances
+ time%   total_s     count    avg_us  name
+  90.4    19.918        10 1991820.2  :decode
+   6.7     1.468        10  146819.3  :prefill
+   2.8     0.607         5  121453.2  :tool
+   0.2     0.047        10    4692.0  :template
+   0.0     0.002        10     198.9  :detokenize
+
+## GPU kernels: total 20.13s over 1204142 instances
+ time%   total_s     count    avg_us  name
+  30.1     6.068     99840      60.8  nvjet_tst_192x8_64x8_4x1_v_bz_TNT
+  29.2     5.870    149760      39.2  nvjet_tst_64x8_64x16_4x1_v_bz_TNT
+  15.1     3.037     12656     239.9  fmha_cutlassF_bf16_aligned_32x128_gmem_sm80(PyTorchMemEffAttention::AttentionKernel<cutlass::bfloat16_t, cutla
+   6.9     1.388     37440      37.1  nvjet_tst_128x8_64x12_4x1_v_bz_TNT
+   3.3     0.663       791     837.8  nvjet_tst_512x8_64x3_2x1_v_bz_TNT
+   2.4     0.490     24960      19.6  triton_poi_fused__scaled_dot_product_efficient_attention__unsafe_view_clone_expand_scalar_tensor_unsqueeze_whe
+   1.8     0.361     74880       4.8  nvjet_tst_64x8_64x16_1x1_v_bz_splitK_TNT
+   1.1     0.218     88140       2.5  triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0
+   0.9     0.185    100928       1.8  void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)0,
+   0.9     0.177     37440       4.7  fused_recurrent_gated_delta_rule_fwd_kernel
+   0.8     0.158     24960       6.3  nvjet_tst_64x8_64x16_4x1_v_bz_splitK_TNT
+   0.6     0.128     37440       3.4  void causal_conv1d_update_kernel<Causal_conv1d_update_kernel_traits<(int)64, (int)4, c10::BFloat16, c10::BFloa
+   0.5     0.105     37440       2.8  triton_poi_fused_copy_copy__4
+   0.5     0.091     37968       2.4  layer_norm_gated_fwd_kernel
+   0.3     0.066     37440       1.7  triton_poi_fused__unsafe_view_mul_silu_1
+   0.3     0.059     37440       1.6  triton_poi_fused__to_copy__unsafe_view_add_clone_empty_like_exp_expand_mul_neg_sigmoid_softplus_split_with_siz
+   0.3     0.051     37440       1.4  triton_poi_fused__unsafe_view_add_2
+   0.2     0.049     37440       1.3  triton_poi_fused__to_copy__unsafe_view_add_clone_empty_like_exp_expand_mul_neg_sigmoid_softplus_split_with_siz
+   0.2     0.049     37440       1.3  triton_poi_fused__to_copy__unsafe_view_add_clone_empty_like_exp_expand_mul_neg_sigmoid_softplus_split_with_siz
+   0.2     0.049       576      85.3  nvjet_tst_192x104_64x5_1x2_h_bz_TNT
+   0.2     0.048     37440       1.3  triton_poi_fused__to_copy__unsafe_view_add_clone_empty_like_exp_expand_mul_neg_sigmoid_softplus_split_with_siz
+   0.2     0.044       384     113.8  nvjet_tst_192x144_64x5_1x2_h_bz_coopB_TNT
+   0.2     0.043       528      81.7  nvjet_tst_128x176_64x5_4x1_v_bz_TNT
+   0.2     0.037     12480       3.0  triton_red_fused__to_copy__unsafe_view_add_mean_mul_pow_rsqrt_11
+   0.2     0.033      2112      15.8  void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::dire
+
+## CUDA API (host side): total 29.36s over 81602 instances
+ time%   total_s     count    avg_us  name
+  61.3    17.990       767   23455.4  cudaEventSynchronize
+  28.5     8.375      2795    2996.4  cudaMemcpyAsync
+   5.3     1.558       777    2005.5  cudaGraphLaunch_v10000
+   1.6     0.480     36940      13.0  cudaLaunchKernel
+   1.4     0.412       464     888.9  cudaMalloc
+   0.9     0.257        47    5472.1  cudaDeviceSynchronize
+   0.3     0.083     12063       6.9  cuLaunchKernelEx
+   0.2     0.066       488     134.5  cuModuleLoad
+   0.1     0.043        54     802.7  cuLibraryLoadData
+   0.1     0.023       915      25.5  cudaStreamSynchronize
+   0.1     0.019      2768       6.7  cuLaunchKernel
+   0.0     0.010         1    9853.6  cudaGraphInstantiateWithFlags_v11040
+
+## GPU memcpy/memset: total 8.27s over 7729 instances
+ time%   total_s     count    avg_us  name
+  99.9     8.265       904    9142.3  [CUDA memcpy Host-to-Device]
+   0.1     0.005      3431       1.4  [CUDA memcpy Device-to-Device]
+   0.0     0.002      2606       0.8  [CUDA memset]
+   0.0     0.002       788       2.3  [CUDA memcpy Device-to-Host]
+
+## CUDA-graph kernels: 777 replays, 1485 kernels/replay, 24.94 ms GPU time/replay
+  GEMM                            75.5%   18.82 ms/replay     626 kernels/replay  avg   30.1 us
+  attention                       17.8%    4.45 ms/replay      64 kernels/replay  avg   69.5 us
+  triton (inductor)                4.6%    1.14 ms/replay     644 kernels/replay  avg    1.8 us
+  fla/conv1d                       2.0%    0.50 ms/replay     144 kernels/replay  avg    3.5 us
+  torch elementwise/copy/other     0.0%    0.01 ms/replay       6 kernels/replay  avg    1.8 us
+  torch reduce                     0.0%    0.01 ms/replay       1 kernels/replay  avg    8.6 us
+ time%  us/replay  n/replay   avg_us  name
+  31.2     7779.4       128     60.8  nvjet_tst_192x8_64x8_4x1_v_bz_TNT
+  30.2     7525.1       192     39.2  nvjet_tst_64x8_64x16_4x1_v_bz_TNT
+  15.2     3796.1        16    237.3  fmha_cutlassF_bf16_aligned_32x128_gmem_sm80
+   7.1     1779.0        48     37.1  nvjet_tst_128x8_64x12_4x1_v_bz_TNT
+   3.4      837.7         1    837.7  nvjet_tst_512x8_64x3_2x1_v_bz_TNT
+   2.5      627.8        32     19.6  triton_poi_fused__scaled_dot_product_efficient_attention__unsafe_view_clone_expand_scalar_
+   1.9      462.9        96      4.8  nvjet_tst_64x8_64x16_1x1_v_bz_splitK_TNT
+   1.1      280.0       113      2.5  triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0
+   0.9      234.6       128      1.8  splitKreduce_kernel
+   0.9      226.3        48      4.7  fused_recurrent_gated_delta_rule_fwd_kernel
+   0.8      201.9        32      6.3  nvjet_tst_64x8_64x16_4x1_v_bz_splitK_TNT
+   0.7      164.6        48      3.4  causal_conv1d_update_kernel
+   0.5      134.7        48      2.8  triton_poi_fused_copy_copy__4
+   0.5      112.6        48      2.3  layer_norm_gated_fwd_kernel
+   0.3       83.9        48      1.7  triton_poi_fused__unsafe_view_mul_silu_1

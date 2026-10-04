@@ -11,6 +11,8 @@ Each entry: profile evidence → Amdahl estimate → change → measured result 
 | p1_s03_static_cache | p1 | + StaticCache (4096 slots) + static decode buffers/mask | 65.4 | – | – | – | 10% slower alone (masked attention over 4096 slots); prerequisite for graphs |
 | p1_s04_cuda_graph | p1 | + CUDA-graph decode step | **31.5** | **660.8** | **2.53** | 0.9375 | 51% of roofline; GPU busy 0.83; 7/8 greedy outputs identical to p1_s02 (1 near-tie) |
 | p1_s05_async_readback | p1 | + pipelined token readback | 31.1 | – | – | – | −1.3%; launch cost was profiler-inflated; 8/8 identical to p1_s04 |
+| p1_s06_compile | p1 | + torch.compile decode (inside our graph) | 25.6 | – | – | – | 1.22×; elementwise 6.48 → 1.14 ms/step; 7/8 identical (near-tie) |
+| p1_s07_gqa_decode_attn | p1 | + GQA-folded GEMM decode attention | **21.4** | (running) | – | – | −16%; 75% of roofline; 8/8 identical to p1_s06 |
 
 ## stage00_baseline
 - Profile: GPU busy 0.21; `_cudnn_attention_forward` 31% of CPU time (2.4 ms CPU / 13 µs GPU per call);
@@ -54,6 +56,18 @@ Each entry: profile evidence → Amdahl estimate → change → measured result 
 - Result: 31.5 → 31.1 ms/tok (−1.3%), 8/8 identical. **The 4 ms was profiler overhead**; host-side numbers from an
   instrumented run must be cross-checked with an uninstrumented A/B (the micro).
 
-## p1_s06_compile — torch.compile (inductor) the decode forward, still inside our CUDA graph (in progress)
+## p1_s06_compile — torch.compile (inductor) the decode forward, still inside our CUDA graph
 - Evidence: node-level graph trace — 2648 elementwise/copy kernels per step, 6.48 ms (21% of the step).
 - Estimate: fusion to a few hundred kernels → ~1.5 ms → step 30.3 → ~25 ms (≈1.2×).
+- Result: **25.6 ms/tok (1.22×)**, matches the estimate; profile: elementwise 1.14 ms in 644 fused kernels,
+  1485 kernels/step. 7/8 identical (near-tie flip from different bf16 rounding).
+- Pitfall: inductor sets `TRITON_CACHE_DIR` to node-local /tmp when unset → fla kernels JIT-ed later missed the
+  cache (cold prefill at a new length bucket 13 s). Pinned cache dirs in the engine.
+
+## p1_s07_gqa_decode_attn — single-token attention as two GQA-folded GEMMs
+- Evidence (p1_s06 profile): attention 4.45 ms/step (18%): HF `repeat_kv` 6× K/V copy (needed because a mask is
+  passed) + `fmha_cutlassF` with one block per head over all 4096 slots, 237 us/layer.
+- Estimate: → <1 ms, step ~21.5 ms.
+- Result: **21.4 ms/tok** (−16%), 75% of the 16.1 ms floor, 8/8 identical. GEMM (~18.8 ms, 85% of HBM BW) is
+  now ~88% of the step → phase-1 exit criterion met; the remaining levers are lower-precision weights (FP8,
+  phase 2) or kernel work (out of scope).
