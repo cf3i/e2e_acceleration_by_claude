@@ -81,11 +81,43 @@ def _silu_mul_quant_kernel(g_ptr, u_ptr, xs_ptr, q_ptr, s_ptr, N, BLOCK: tl.cons
     tl.store(s_ptr + row, s)
 
 
+@triton.jit
+def _silu_mul_chunk(g_ptr, u_ptr, base, off, xs, CH: tl.constexpr):
+    offs = off + tl.arange(0, CH)
+    g = (tl.load(g_ptr + base + offs).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+    u = (tl.load(u_ptr + base + offs).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+    return (g * tl.sigmoid(g) * u).to(tl.bfloat16).to(tl.float32)
+
+
+@triton.jit
+def _silu_mul_quant1_kernel(g_ptr, u_ptr, xs_ptr, q_ptr, s_ptr, N: tl.constexpr, CH: tl.constexpr,
+                            TAIL: tl.constexpr):
+    """Single pass, the whole row (N = 2 CH + TAIL) in registers: the row is read once and the program has all
+    its loads in flight at once (the two-pass loop is latency-bound for small T and re-reads rows for large T)."""
+    row = tl.program_id(0).to(tl.int64)
+    xs = tl.load(xs_ptr + row)
+    base = row * N
+    h0 = _silu_mul_chunk(g_ptr, u_ptr, base, 0, xs, CH)
+    h1 = _silu_mul_chunk(g_ptr, u_ptr, base, CH, xs, CH)
+    h2 = _silu_mul_chunk(g_ptr, u_ptr, base, 2 * CH, xs, TAIL)
+    amax = tl.maximum(tl.maximum(tl.max(tl.abs(h0), 0), tl.max(tl.abs(h1), 0)), tl.max(tl.abs(h2), 0))
+    s = tl.maximum(amax, 1e-12) / 448.0
+    tl.store(q_ptr + base + tl.arange(0, CH), tl.clamp(h0 / s, -448.0, 448.0).to(tl.float8e4nv))
+    tl.store(q_ptr + base + CH + tl.arange(0, CH), tl.clamp(h1 / s, -448.0, 448.0).to(tl.float8e4nv))
+    tl.store(q_ptr + base + 2 * CH + tl.arange(0, TAIL), tl.clamp(h2 / s, -448.0, 448.0).to(tl.float8e4nv))
+    tl.store(s_ptr + row, s)
+
+
 def silu_mul_quant(gate, up, xs):
     T, N = gate.shape
     q = torch.empty((T, N), dtype=FP8, device=gate.device)
     s = torch.empty((T,), dtype=torch.float32, device=gate.device)
-    _silu_mul_quant_kernel[(T,)](gate, up, xs, q, s, N, BLOCK=4096, num_warps=8)
+    CH = 8192
+    tail = N - 2 * CH
+    if 0 < tail <= CH and tail & (tail - 1) == 0:
+        _silu_mul_quant1_kernel[(T,)](gate, up, xs, q, s, N=N, CH=CH, TAIL=tail, num_warps=16)
+    else:
+        _silu_mul_quant_kernel[(T,)](gate, up, xs, q, s, N, BLOCK=4096, num_warps=8)
     return q, s
 
 
@@ -261,46 +293,58 @@ def gdn_gates(a, b, xs, A_log, dt_bias, HV=48):
 @triton.jit
 def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_ptr, state_ptr, o_ptr, row_slot,
                        row0_ptr, HV: tl.constexpr, HK: tl.constexpr, DK: tl.constexpr, DV: tl.constexpr,
-                       BV: tl.constexpr):
-    """One program per (decode row, value head, V block): gates + one gated delta-rule step on the slot's [DK, DV]
-    state (bf16 storage, fp32 math), written back in place. q, k are l2-normalized already."""
+                       BV: tl.constexpr, HPP: tl.constexpr, STAGES: tl.constexpr):
+    """One program per (decode row, group of HPP value heads, V block): gates + one gated delta-rule step on the
+    slot's [DK, DV] states (bf16 storage, fp32 math), written back in place; the head loop is software-pipelined
+    (the next head's state load overlaps this head's math). q, k are l2-normalized already."""
     r = tl.load(row0_ptr).to(tl.int64) + tl.program_id(0)
-    hv = tl.program_id(1)
     vb = tl.program_id(2)
     slot = tl.load(row_slot + r).to(tl.int64)
     if slot >= 0:
-        kh = hv // (HV // HK)
         dk = tl.arange(0, DK)
         dv = vb * BV + tl.arange(0, BV)
-        q = tl.load(q_ptr + (r * HK + kh) * DK + dk).to(tl.float32) * (1.0 / tl.sqrt(DK * 1.0))
-        k = tl.load(k_ptr + (r * HK + kh) * DK + dk).to(tl.float32)
-        v = tl.load(v_ptr + (r * HV + hv) * DV + dv).to(tl.float32)
         xs = tl.load(xs_ptr + r)
-        a = (tl.load(a_ptr + r * HV + hv).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-        b = (tl.load(b_ptr + r * HV + hv).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-        x = a + tl.load(dtb_ptr + hv)
-        sp = tl.where(x > 20.0, x, tl.log(1.0 + tl.exp(x)))
-        g = -tl.exp(tl.load(alog_ptr + hv)) * sp
-        beta = tl.sigmoid(b)
-        sp_ = state_ptr + ((slot * HV + hv) * DK + dk[:, None]) * DV + dv[None, :]
-        S = tl.load(sp_).to(tl.float32) * tl.exp(g)
-        kv = tl.sum(S * k[:, None], 0)
-        delta = (v - kv) * beta
-        S = S + k[:, None] * delta[None, :]
-        o = tl.sum(S * q[:, None], 0)
-        tl.store(sp_, S.to(tl.bfloat16))
-        tl.store(o_ptr + (r * HV + hv) * DV + dv, o.to(tl.bfloat16))
+        for i in tl.range(0, HPP, num_stages=STAGES):
+            hv = tl.program_id(1) * HPP + i
+            kh = hv // (HV // HK)
+            sp_ = state_ptr + ((slot * HV + hv) * DK + dk[:, None]) * DV + dv[None, :]
+            S = tl.load(sp_, eviction_policy="evict_first").to(tl.float32)
+            q = tl.load(q_ptr + (r * HK + kh) * DK + dk).to(tl.float32) * (1.0 / tl.sqrt(DK * 1.0))
+            k = tl.load(k_ptr + (r * HK + kh) * DK + dk).to(tl.float32)
+            v = tl.load(v_ptr + (r * HV + hv) * DV + dv).to(tl.float32)
+            a = (tl.load(a_ptr + r * HV + hv).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+            b = (tl.load(b_ptr + r * HV + hv).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+            x = a + tl.load(dtb_ptr + hv)
+            sp = tl.where(x > 20.0, x, tl.log(1.0 + tl.exp(x)))
+            g = -tl.exp(tl.load(alog_ptr + hv)) * sp
+            beta = tl.sigmoid(b)
+            S = S * tl.exp(g)
+            kv = tl.sum(S * k[:, None], 0)
+            delta = (v - kv) * beta
+            S = S + k[:, None] * delta[None, :]
+            o = tl.sum(S * q[:, None], 0)
+            tl.store(sp_, S.to(tl.bfloat16), cache_modifier=".cs")
+            tl.store(o_ptr + (r * HV + hv) * DV + dv, o.to(tl.bfloat16))
 
 
-GDN_DECODE_CFG = {"BV": 32, "num_warps": 1}
+GDN_DECODE_CFG = None  # override for benchmarks; default: by row count (bench/micro_gdn.py)
+
+
+def _gdn_decode_cfg(n_rows):
+    if GDN_DECODE_CFG:
+        return GDN_DECODE_CFG
+    if n_rows <= 8:
+        return {"BV": 32, "num_warps": 1, "HPP": 1, "STAGES": 1}
+    return {"BV": 64, "num_warps": 2, "HPP": 1, "STAGES": 1}
 
 
 def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows, o, HV=48, HK=16, DK=128, DV=128):
     """Rows row0 + [0, n_rows) with row_slot >= 0 are decode rows (row0: device int32 scalar).
     o [T, HV, DV] is written for those rows."""
-    BV, nw = GDN_DECODE_CFG["BV"], GDN_DECODE_CFG["num_warps"]
-    _gdn_decode_kernel[(n_rows, HV, DV // BV)](q, k, v, a, b, xs, A_log, dt_bias, state, o, row_slot, row0,
-                                               HV=HV, HK=HK, DK=DK, DV=DV, BV=BV, num_warps=nw)
+    c = _gdn_decode_cfg(n_rows)
+    _gdn_decode_kernel[(n_rows, HV // c["HPP"], DV // c["BV"])](
+        q, k, v, a, b, xs, A_log, dt_bias, state, o, row_slot, row0, HV=HV, HK=HK, DK=DK, DV=DV, BV=c["BV"],
+        HPP=c["HPP"], STAGES=c["STAGES"], num_warps=c["num_warps"])
     return o
 
 
@@ -479,33 +523,41 @@ def qkv_prep(q_raw, k_raw, v_raw, xs, pos, slot_map, qn_w1, kn_w1, k_cache, v_ca
 
 # ---------------------------------------------------------------- paged attention
 @triton.jit
-def _attn_decode_kernel(q_ptr, k_cache, v_cache, block_table, row_slot, pos_ptr, row0_ptr, o_ptr, scale,
-                        max_blocks, HQ: tl.constexpr, HKV: tl.constexpr, D: tl.constexpr, BS: tl.constexpr,
-                        BLOCK_M: tl.constexpr):
-    """One program per (decode row, kv head): the G = HQ / HKV query heads of the row against the sequence's
-    paged KV (positions [0, pos]). Rows row0 + program_id(0); rows with row_slot < 0 are skipped."""
-    r = tl.load(row0_ptr).to(tl.int64) + tl.program_id(0)
+def _attn_decode_kernel(q_ptr, k_cache, v_cache, block_table, row_slot, pos_ptr, row0_ptr, o_ptr, po_ptr, plse_ptr,
+                        scale, max_blocks, HQ: tl.constexpr, HKV: tl.constexpr, D: tl.constexpr, BS: tl.constexpr,
+                        BLOCK_M: tl.constexpr, NSPLIT: tl.constexpr):
+    """One program per (decode row, kv head, KV split): the G = HQ / HKV query heads of the row against a
+    contiguous share of the sequence's paged KV (positions [0, pos]). Rows row0 + program_id(0); rows with
+    row_slot < 0 are skipped. NSPLIT == 1: writes o; else the split's normalized partial output and log2-sum-exp
+    (combined by _attn_decode_combine_kernel)."""
+    i = tl.program_id(0)
+    r = tl.load(row0_ptr).to(tl.int64) + i
     h = tl.program_id(1)
+    sp = tl.program_id(2)
     G: tl.constexpr = HQ // HKV
     slot = tl.load(row_slot + r).to(tl.int64)
     if slot < 0:
         return
     L = tl.load(pos_ptr + r) + 1
+    nblk = tl.cdiv(L, BS)
+    per = tl.cdiv(nblk, NSPLIT)
+    j0 = sp * per
+    j1 = tl.minimum(j0 + per, nblk)
     m_ = tl.arange(0, BLOCK_M)
     d = tl.arange(0, D)
     n_ = tl.arange(0, BS)
     rows = m_ < G
     q = tl.load(q_ptr + (r * HQ + h * G + m_)[:, None] * D + d[None, :], mask=rows[:, None], other=0.0)
-    m_i = tl.full((BLOCK_M,), float("-inf"), tl.float32)
+    m_i = tl.full((BLOCK_M,), -1e30, tl.float32)
     l_i = tl.zeros((BLOCK_M,), tl.float32)
     acc = tl.zeros((BLOCK_M, D), tl.float32)
     qk_scale = scale * 1.4426950408889634
-    for j in range(0, tl.cdiv(L, BS)):
+    for j in range(j0, j1):
         blk = tl.load(block_table + slot * max_blocks + j).to(tl.int64)
         kv = ((blk * BS + n_) * HKV + h)[:, None] * D + d[None, :]
         k = tl.load(k_cache + kv)
         s = tl.dot(q, tl.trans(k)) * qk_scale
-        s = tl.where((j * BS + n_)[None, :] < L, s, float("-inf"))
+        s = tl.where((j * BS + n_)[None, :] < L, s, -1e30)
         m_new = tl.maximum(m_i, tl.max(s, 1))
         p = tl.exp2(s - m_new[:, None])
         alpha = tl.exp2(m_i - m_new)
@@ -513,28 +565,51 @@ def _attn_decode_kernel(q_ptr, k_cache, v_cache, block_table, row_slot, pos_ptr,
         v = tl.load(v_cache + kv)
         acc = acc * alpha[:, None] + tl.dot(p.to(tl.bfloat16), v)
         m_i = m_new
-    l_i = tl.where(l_i == 0.0, 1.0, l_i)
-    o = acc / l_i[:, None]
-    tl.store(o_ptr + (r * HQ + h * G + m_)[:, None] * D + d[None, :], o.to(tl.bfloat16), mask=rows[:, None])
+    l_s = tl.where(l_i == 0.0, 1.0, l_i)
+    o = acc / l_s[:, None]
+    if NSPLIT == 1:
+        tl.store(o_ptr + (r * HQ + h * G + m_)[:, None] * D + d[None, :], o.to(tl.bfloat16), mask=rows[:, None])
+    else:
+        hq = h * G + m_
+        tl.store(po_ptr + ((i * HQ + hq) * NSPLIT + sp)[:, None] * D + d[None, :], o, mask=rows[:, None])
+        lse = tl.where(l_i == 0.0, -1e30, m_i + tl.log2(l_s))
+        tl.store(plse_ptr + (i * HQ + hq) * NSPLIT + sp, lse, mask=rows)
+
+
+@triton.jit
+def _attn_decode_combine_kernel(po_ptr, plse_ptr, row_slot, row0_ptr, o_ptr, HQ: tl.constexpr, D: tl.constexpr,
+                                NSPLIT: tl.constexpr):
+    i = tl.program_id(0)
+    r = tl.load(row0_ptr).to(tl.int64) + i
+    hq = tl.program_id(1)
+    if tl.load(row_slot + r) < 0:
+        return
+    sp = tl.arange(0, NSPLIT)
+    d = tl.arange(0, D)
+    lse = tl.load(plse_ptr + (i * HQ + hq) * NSPLIT + sp)
+    w = tl.exp2(lse - tl.max(lse, 0))
+    po = tl.load(po_ptr + ((i * HQ + hq) * NSPLIT + sp)[:, None] * D + d[None, :])
+    o = tl.sum(po * w[:, None], 0) / tl.sum(w, 0)
+    tl.store(o_ptr + (r * HQ + hq) * D + d, o.to(tl.bfloat16))
 
 
 @triton.jit
 def _attn_prefill_kernel(q_ptr, k_cache, v_cache, block_table, tile_tok0, tile_ntok, tile_pos0, tile_slot,
-                         o_ptr, scale, max_blocks,
+                         o_ptr, scale, max_blocks, n_tiles,
                          HQ: tl.constexpr, HKV: tl.constexpr, D: tl.constexpr, BS: tl.constexpr,
-                         BLOCK_M: tl.constexpr):
-    """One program per (query tile, kv head). A tile = up to BLOCK_M // G consecutive tokens of one sequence
-    (rows = token x query head of the group), causal over the sequence's paged KV."""
-    tile = tl.program_id(0)
+                         BLOCK_M: tl.constexpr, TQ: tl.constexpr):
+    """One program per (query tile, kv head). A tile = up to TQ consecutive tokens of one sequence (rows = token x
+    query head of the group), causal over the sequence's paged KV. KV blocks entirely below the tile's first
+    position need no mask; the last tiles of the list (longest contexts) run first."""
+    tile = n_tiles - 1 - tl.program_id(0)
     h = tl.program_id(1)
     G: tl.constexpr = HQ // HKV
-    TQ: tl.constexpr = BLOCK_M // G
-    tok0 = tl.load(tile_tok0 + tile).to(tl.int64)
     ntok = tl.load(tile_ntok + tile)
-    pos0 = tl.load(tile_pos0 + tile)
-    slot = tl.load(tile_slot + tile).to(tl.int64)
     if ntok == 0:  # padding tile
         return
+    tok0 = tl.load(tile_tok0 + tile).to(tl.int64)
+    pos0 = tl.load(tile_pos0 + tile)
+    slot = tl.load(tile_slot + tile).to(tl.int64)
     m_ = tl.arange(0, BLOCK_M)
     tq = m_ // G
     g = m_ % G
@@ -544,46 +619,70 @@ def _attn_prefill_kernel(q_ptr, k_cache, v_cache, block_table, tile_tok0, tile_n
     n_ = tl.arange(0, BS)
     qoff = ((tok0 + tq) * HQ + h * G + g)[:, None] * D + d[None, :]
     q = tl.load(q_ptr + qoff, mask=rows[:, None], other=0.0)
-    m_i = tl.full((BLOCK_M,), float("-inf"), tl.float32)
+    m_i = tl.full((BLOCK_M,), -1e30, tl.float32)
     l_i = tl.zeros((BLOCK_M,), tl.float32)
     acc = tl.zeros((BLOCK_M, D), tl.float32)
     qk_scale = scale * 1.4426950408889634
-    L = pos0 + ntok
-    for j in range(0, tl.cdiv(L, BS)):
-        blk = tl.load(block_table + slot * max_blocks + j).to(tl.int64)
+    bt = block_table + slot * max_blocks
+    n_full = (pos0 + 1) // BS  # blocks whose keys are all <= pos0
+    for j in range(0, n_full):
+        blk = tl.load(bt + j).to(tl.int64)
         kv = ((blk * BS + n_) * HKV + h)[:, None] * D + d[None, :]
         k = tl.load(k_cache + kv)
         s = tl.dot(q, tl.trans(k)) * qk_scale
-        s = tl.where((j * BS + n_)[None, :] <= qpos[:, None], s, float("-inf"))
         m_new = tl.maximum(m_i, tl.max(s, 1))
-        m_new = tl.where(m_new == float("-inf"), 0.0, m_new)
         p = tl.exp2(s - m_new[:, None])
         alpha = tl.exp2(m_i - m_new)
         l_i = l_i * alpha + tl.sum(p, 1)
         v = tl.load(v_cache + kv)
         acc = acc * alpha[:, None] + tl.dot(p.to(tl.bfloat16), v)
         m_i = m_new
-    l_i = tl.where(l_i == 0.0, 1.0, l_i)
+    for j in range(n_full, tl.cdiv(pos0 + ntok, BS)):
+        blk = tl.load(bt + j).to(tl.int64)
+        kv = ((blk * BS + n_) * HKV + h)[:, None] * D + d[None, :]
+        k = tl.load(k_cache + kv)
+        s = tl.dot(q, tl.trans(k)) * qk_scale
+        s = tl.where((j * BS + n_)[None, :] <= qpos[:, None], s, -1e30)
+        m_new = tl.maximum(m_i, tl.max(s, 1))
+        p = tl.exp2(s - m_new[:, None])
+        alpha = tl.exp2(m_i - m_new)
+        l_i = l_i * alpha + tl.sum(p, 1)
+        v = tl.load(v_cache + kv)
+        acc = acc * alpha[:, None] + tl.dot(p.to(tl.bfloat16), v)
+        m_i = m_new
     o = acc / l_i[:, None]
     tl.store(o_ptr + qoff, o.to(tl.bfloat16), mask=rows[:, None])
 
 
+ATTN_DECODE_NSPLIT = None  # override for benchmarks; default: enough programs to fill the GPU
+
+
 def attn_decode(q, k_cache, v_cache, block_table, row_slot, pos, row0, n_rows, o, BS, HQ=24, HKV=4, D=256):
-    _attn_decode_kernel[(n_rows, HKV)](q, k_cache, v_cache, block_table, row_slot, pos, row0, o, D ** -0.5,
-                                       block_table.shape[1], HQ=HQ, HKV=HKV, D=D, BS=BS, BLOCK_M=16,
-                                       num_warps=4, num_stages=2)
+    ns = ATTN_DECODE_NSPLIT or min(32, triton.next_power_of_2(max(1, 264 // (n_rows * HKV))))
+    if ns > 1:
+        po = torch.empty((n_rows, HQ, ns, D), dtype=torch.float32, device=q.device)
+        plse = torch.empty((n_rows, HQ, ns), dtype=torch.float32, device=q.device)
+    else:
+        po = plse = o
+    _attn_decode_kernel[(n_rows, HKV, ns)](q, k_cache, v_cache, block_table, row_slot, pos, row0, o, po, plse,
+                                           D ** -0.5, block_table.shape[1], HQ=HQ, HKV=HKV, D=D, BS=BS, BLOCK_M=16,
+                                           NSPLIT=ns, num_warps=4, num_stages=2)
+    if ns > 1:
+        _attn_decode_combine_kernel[(n_rows, HQ)](po, plse, row_slot, row0, o, HQ=HQ, D=D, NSPLIT=ns, num_warps=4)
     return o
 
 
-PREFILL_BLOCK_M = 64
-PREFILL_TQ = PREFILL_BLOCK_M // 6
+PREFILL_CFG = {"BLOCK_M": 128, "num_warps": 8, "num_stages": 2}
+PREFILL_TQ = PREFILL_CFG["BLOCK_M"] // 6
 
 
 def attn_prefill(q, k_cache, v_cache, block_table, tile_tok0, tile_ntok, tile_pos0, tile_slot, n_tiles, o, BS,
-                 HQ=24, HKV=4, D=256):
+                 HQ=24, HKV=4, D=256, cfg=None):
+    c = cfg or PREFILL_CFG
     _attn_prefill_kernel[(n_tiles, HKV)](q, k_cache, v_cache, block_table, tile_tok0, tile_ntok, tile_pos0,
-                                         tile_slot, o, D ** -0.5, block_table.shape[1], HQ=HQ, HKV=HKV, D=D,
-                                         BS=BS, BLOCK_M=PREFILL_BLOCK_M, num_warps=8, num_stages=2)
+                                         tile_slot, o, D ** -0.5, block_table.shape[1], n_tiles, HQ=HQ, HKV=HKV,
+                                         D=D, BS=BS, BLOCK_M=c["BLOCK_M"], TQ=c["BLOCK_M"] // (HQ // HKV),
+                                         num_warps=c["num_warps"], num_stages=c["num_stages"])
     return o
 
 
