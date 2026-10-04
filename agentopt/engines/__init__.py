@@ -43,6 +43,9 @@ PRESETS.update({
     "p2_s10": ("batch", {**_P1, "num_slots": 64,                  # + every turn's suffix as forced tokens
                          "prefix_reuse": True, "force_max": 512, "inplace_state": True, "fp8": "tensor",
                          "buckets": (8, 16, 24, 32, 48), "state_dtype": "bf16", "recurrent_launch": "tuned"}),
+    "p2_s10_bf16": ("batch", {**_P1, "num_slots": 64,             # reference: p2_s10 with bf16 weights (vs vLLM bf16)
+                              "prefix_reuse": True, "force_max": 512, "inplace_state": True,
+                              "buckets": (8, 16, 24, 32, 48), "state_dtype": "bf16", "recurrent_launch": "tuned"}),
 })
 
 
