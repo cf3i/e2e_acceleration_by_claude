@@ -51,11 +51,12 @@ class BatchEngine(NaiveEngine):
     def __init__(self, num_slots: int = 32, max_len: int = 2048, compile_decode: bool = True,
                  gqa_decode_attn: bool = True, prefix_reuse: bool = False, force_max: int = 0,
                  inplace_state: bool = False, fp8: str | None = None, buckets: tuple | None = None,
-                 state_dtype: str | None = None, **kw):
+                 state_dtype: str | None = None, recurrent_launch: str | None = None, **kw):
         super().__init__(**kw)
         self.options.update(num_slots=num_slots, max_len=max_len, compile_decode=compile_decode,
                             gqa_decode_attn=gqa_decode_attn, prefix_reuse=prefix_reuse, force_max=force_max,
-                            inplace_state=inplace_state, fp8=fp8, buckets=buckets, state_dtype=state_dtype)
+                            inplace_state=inplace_state, fp8=fp8, buckets=buckets, state_dtype=state_dtype,
+                            recurrent_launch=recurrent_launch)
         assert prefix_reuse or not force_max, "forced-token prefill only feeds suffixes of reusable state"
         if fp8:
             from .quant import fp8_quantize
@@ -92,7 +93,7 @@ class BatchEngine(NaiveEngine):
             install_extend(self.model, self.cache)
         if inplace_state:
             from .inplace_state import install as install_inplace
-            install_inplace(self.model, self.cache)
+            install_inplace(self.model, self.cache, recurrent_launch)
         self.slot_tokens = [None] * S  # tokens whose state slot s holds (None = nothing reusable)
         self.next_tok = [None] * S     # token the next decode step feeds into slot s
         self.live = set()
@@ -124,6 +125,8 @@ class BatchEngine(NaiveEngine):
     @torch.inference_mode()
     def _capture(self):
         self.prefill(0, list(range(16)))  # allocates the slot storage (lazy, from HF's own tensors)
+        if self.prefix_reuse:  # JIT the extend path (initial_state given) now, not in the first real turn
+            self.prefill(0, list(range(24)))
         self.cache.begin_decode()
         self.graphs, pool = {}, None
         for B in sorted(self.buckets, reverse=True):  # largest first; the others reuse its memory pool

@@ -34,6 +34,12 @@ PRESETS.update({
     "p2_s08": ("batch", {**_P1, "num_slots": 64,                  # + recurrent states stored in bf16
                          "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": "tensor",
                          "buckets": (8, 16, 24, 32, 48), "state_dtype": "bf16"}),
+    "p2_s09": ("batch", {**_P1, "num_slots": 64,                  # + tuned launch config of the fla decode kernel
+                         "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": "tensor",
+                         "buckets": (8, 16, 24, 32, 48), "state_dtype": "bf16", "recurrent_launch": "tuned"}),
+    "p2_s09f": ("batch", {**_P1, "num_slots": 64,                 # ablation: tuned launch, fp32 states
+                          "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": "tensor",
+                          "buckets": (8, 16, 24, 32, 48), "recurrent_launch": "tuned"}),
 })
 
 
