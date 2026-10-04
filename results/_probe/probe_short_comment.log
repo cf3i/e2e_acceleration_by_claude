@@ -1,0 +1,7 @@
+srun: job 296936 queued and waiting for resources
+srun: job 296936 has been allocated resources
+VARIANT ['short_comment']
+[2026-10-04T13:09:40.150] error: *** STEP 296936.0 ON orix-worker-h100-2 CANCELLED AT 2026-10-04T13:09:40 DUE to SIGNAL Terminated ***
+srun: error: orix-worker-h100-2: task 0: Terminated
+srun: Terminating StepId=296936.0
+srun: Force Terminated StepId=296936.0

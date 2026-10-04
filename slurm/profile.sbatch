@@ -2,10 +2,12 @@
 # L2 (torch.profiler) + L3 (nsys) profiles.
 # Usage: STAGE=stage00_baseline ARGS="--engine naive --runner serial" sbatch slurm/profile.sbatch
 #SBATCH --job-name=agentopt-profile
-#SBATCH --partition=batch-h100
+#SBATCH --partition=freecycle-h100
+#SBATCH --qos=freecycle
+#SBATCH --requeue
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --mem=128G
 #SBATCH --time=03:00:00
 #SBATCH --output=slurm/logs/%x-%j.out
 set -euo pipefail
@@ -14,7 +16,11 @@ source .venv/bin/activate
 : "${STAGE:?set STAGE}"
 P=results/$STAGE/profile
 mkdir -p "$P"
-TORCH_TASKS=${TORCH_TASKS:-2}
+(hostname; uptime; nvidia-smi) > "$P/node.txt"
+slurm/gpumon.sh "$P/gpumon.csv" &
+GPUMON=$!
+trap "kill $GPUMON 2>/dev/null" EXIT
+TORCH_TASKS=${TORCH_TASKS:-1}
 NSYS_TASKS=${NSYS_TASKS:-4}
 
 echo "== torch.profiler"

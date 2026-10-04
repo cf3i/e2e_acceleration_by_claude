@@ -2,8 +2,9 @@
 
 ## Scenario (fixed for all stages)
 - Offline batch math agent: 128 fixed GSM8K test questions (`data/gsm8k_128.jsonl`, seed 0), all available at t=0.
-- ReAct-style agent with Qwen native tool-call format, one `python` tool (stdout returned).
-- Model: Qwen3.5-2B (hybrid: 18 Gated-DeltaNet linear-attn layers + 6 full-attn GQA layers, 248k vocab), bf16.
+- ReAct-style agent with Qwen native tool-call format, one `python` tool (stdout returned); 27B uses the tool on ~97% of tasks unprompted.
+- Model: Qwen3.5-27B (hybrid: 48 Gated-DeltaNet linear-attn layers + 16 full-attn GQA layers, 248k vocab), bf16 ≈ 54 GB.
+  (Switched from Qwen3.5-2B: it rarely used tools and fell into greedy repetition loops.)
 - Non-thinking mode, greedy decoding, ≤6 turns/task, ≤512 new tokens/turn.
 
 ## Metrics
@@ -16,7 +17,7 @@
 2. Amdahl breakdown → for each candidate estimate p (fraction) and s (local speedup): 1/((1-p)+p/s).
 3. Implement ONE change. 4. bench (`slurm/bench.sbatch`). 5. Record in `results/stageNN_*/` and `OPTIMIZATION_LOG.md`, git tag.
 
-Rules: profile and bench are separate runs; warmup; repeats=3 once a run is <10 min; partition batch-h100.
+Rules: profile and bench are separate runs; warmup; repeats=3 once a run is <10 min; partition freecycle-h100 (qos freecycle, preemptible → --requeue).
 Scope: no custom kernels; existing libraries and framework/system-level changes are allowed.
 
 ## Stop criteria

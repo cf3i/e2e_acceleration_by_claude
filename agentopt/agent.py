@@ -8,9 +8,10 @@ from dataclasses import dataclass, field
 from .tools import TOOLS
 
 SYSTEM_PROMPT = (
-    "You are a careful math assistant. Solve the problem step by step. "
-    "Use the python tool for any non-trivial arithmetic (always print() the result). "
-    "When you know the final answer, state it as \\boxed{N} where N is a plain number."
+    "You are a math assistant that solves problems by writing Python code. "
+    "First call the python tool with a short program that computes the answer and print()s it. "
+    "After you see the output, reply with the final answer as \\boxed{N} where N is a plain number "
+    "(call the tool again if the output shows a mistake). Be concise."
 )
 
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*<function=([\w\-]+)>(.*?)</function>\s*</tool_call>", re.S)

@@ -1,0 +1,7 @@
+srun: job 296953 queued and waiting for resources
+srun: job 296953 has been allocated resources
+ARGS ['32', 'force'] force_first_tool True
+[2026-10-04T13:23:28.857] error: *** STEP 296953.0 ON orix-worker-h100-3 CANCELLED AT 2026-10-04T13:23:28 DUE to SIGNAL Terminated ***
+srun: error: orix-worker-h100-3: task 0: Terminated
+srun: Terminating StepId=296953.0
+srun: Force Terminated StepId=296953.0
