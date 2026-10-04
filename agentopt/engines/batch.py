@@ -50,11 +50,12 @@ from .slot_cache import SlotCache
 class BatchEngine(NaiveEngine):
     def __init__(self, num_slots: int = 32, max_len: int = 2048, compile_decode: bool = True,
                  gqa_decode_attn: bool = True, prefix_reuse: bool = False, force_max: int = 0,
-                 inplace_state: bool = False, fp8: str | None = None, buckets: tuple | None = None, **kw):
+                 inplace_state: bool = False, fp8: str | None = None, buckets: tuple | None = None,
+                 state_dtype: str | None = None, **kw):
         super().__init__(**kw)
         self.options.update(num_slots=num_slots, max_len=max_len, compile_decode=compile_decode,
                             gqa_decode_attn=gqa_decode_attn, prefix_reuse=prefix_reuse, force_max=force_max,
-                            inplace_state=inplace_state, fp8=fp8, buckets=buckets)
+                            inplace_state=inplace_state, fp8=fp8, buckets=buckets, state_dtype=state_dtype)
         assert prefix_reuse or not force_max, "forced-token prefill only feeds suffixes of reusable state"
         if fp8:
             from .quant import fp8_quantize
@@ -83,6 +84,8 @@ class BatchEngine(NaiveEngine):
         self.force_host = torch.zeros((2, S), dtype=torch.long, pin_memory=True)
         self.event = torch.cuda.Event()
         self.cache = SlotCache(self.model.config, S, max_len, self.pos_buf)
+        if state_dtype:  # storage dtype of the Gated-DeltaNet recurrent states (HF/fla produce fp32)
+            self.cache.state_dtype = {"bf16": torch.bfloat16, "fp32": torch.float32}[state_dtype]
         self.prefix_reuse = prefix_reuse
         if prefix_reuse:
             from .hybrid_prefill import install as install_extend

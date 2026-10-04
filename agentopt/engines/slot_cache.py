@@ -54,6 +54,7 @@ class SlotCache:
         self.mode, self.slot, self.start, self.n_new = "decode", 0, 0, 0
         self.prev_conv = None  # extend mode: the slot's conv window before this prefill (current layer)
         self.recurrent_inplace = False  # decode kernel already wrote the new states into our buffers
+        self.state_dtype = None  # recurrent-state storage dtype (None: what HF produces, fp32)
 
     # --- mode switches (host side, outside the captured graph) ---
     def begin_prefill(self, slot: int, start: int = 0, n_new: int = 0):
@@ -84,8 +85,8 @@ class SlotCache:
             if l is not None and l.rec_full is not None:
                 l.recurrent_states = l.rec_full[:B]
 
-    def _alloc(self, name, like, idx, tail):
-        big = like.new_zeros((len(idx), self.num_slots, *tail))
+    def _alloc(self, name, like, idx, tail, dtype=None):
+        big = like.new_zeros((len(idx), self.num_slots, *tail), dtype=dtype or like.dtype)
         self.big[name] = big
         return {li: big[j] for j, li in enumerate(idx)}
 
@@ -137,7 +138,8 @@ class SlotCache:
     def update_recurrent_state(self, recurrent_states, layer_idx, **kwargs):
         layer = self.layers[layer_idx]
         if layer.rec_full is None:
-            for li, t in self._alloc("rec", recurrent_states, self.lin_idx, recurrent_states.shape[1:]).items():
+            for li, t in self._alloc("rec", recurrent_states, self.lin_idx, recurrent_states.shape[1:],
+                                    self.state_dtype).items():
                 self.layers[li].rec_full = t
             self.set_rows(self.B)
         if self.mode == "prefill":

@@ -18,7 +18,7 @@ from fla.ops.gated_delta_rule.fused_recurrent import fused_recurrent_gated_delta
 @torch.compiler.disable
 def recurrent_inplace(q, k, v, g=None, beta=None, initial_state=None, output_final_state=False,
                       use_qk_l2norm_in_kernel=False, scale=None, **kw):
-    assert initial_state is not None and initial_state.dtype == torch.float32 and initial_state.is_contiguous()
+    assert initial_state is not None and initial_state.is_contiguous()  # fp32 or bf16 (kernel computes in fp32)
     q, k, v, g, beta = (x.contiguous() for x in (q, k, v, g, beta))
     B, T, H, K = k.shape
     HV, V = v.shape[2], v.shape[-1]

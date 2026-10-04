@@ -31,6 +31,9 @@ PRESETS.update({
     "p2_s07": ("batch", {**_P1, "num_slots": 64,                  # 64 slots, per-bucket graphs over compacted rows
                          "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": "tensor",
                          "buckets": (8, 16, 24, 32, 48)}),
+    "p2_s08": ("batch", {**_P1, "num_slots": 64,                  # + recurrent states stored in bf16
+                         "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": "tensor",
+                         "buckets": (8, 16, 24, 32, 48), "state_dtype": "bf16"}),
 })
 
 
