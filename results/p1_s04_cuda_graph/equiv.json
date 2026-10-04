@@ -1,0 +1,134 @@
+{
+  "ref": "p1_s02",
+  "ref_seconds": 68.44388888776302,
+  "num_prompts": 8,
+  "candidates": {
+    "p1_s03": {
+      "seconds": 70.39762103185058,
+      "identical": 7,
+      "rows": [
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 107,
+          "cand_len": 107
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 85,
+          "cand_len": 85
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 64,
+          "cand_len": 64
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 221,
+          "cand_len": 221
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 169,
+          "cand_len": 169
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 135,
+          "cand_len": 135
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 176,
+          "cand_len": 176
+        },
+        {
+          "identical": false,
+          "first_divergence": 42,
+          "ref_len": 90,
+          "cand_len": 87
+        }
+      ]
+    },
+    "p1_s04": {
+      "seconds": 33.55357666499913,
+      "identical": 7,
+      "rows": [
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 107,
+          "cand_len": 107
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 85,
+          "cand_len": 85
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 64,
+          "cand_len": 64
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 221,
+          "cand_len": 221
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 169,
+          "cand_len": 169
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 135,
+          "cand_len": 135
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 176,
+          "cand_len": 176
+        },
+        {
+          "identical": false,
+          "first_divergence": 42,
+          "ref_len": 90,
+          "cand_len": 87
+        }
+      ]
+    }
+  },
+  "env": {
+    "host": "orix-worker-h100-7",
+    "slurm_job_id": "297134",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.5.4",
+    "git_commit": "566285ef879f77e309602f7a88efa7b74c1ed73e",
+    "snapshot": true,
+    "git_dirty": false,
+    "argv": [
+      "bench/check_equiv.py",
+      "--stage",
+      "p1_s04_cuda_graph",
+      "--ref",
+      "p1_s02",
+      "--cand",
+      "p1_s03,p1_s04"
+    ]
+  }
+}

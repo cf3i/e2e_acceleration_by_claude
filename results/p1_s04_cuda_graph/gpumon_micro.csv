@@ -1,0 +1,7 @@
+timestamp, index, clocks.current.sm [MHz], clocks.current.memory [MHz], utilization.gpu [%], memory.used [MiB], power.draw [W], temperature.gpu, clocks_event_reasons.active
+2026/10/04 15:19:55.462, 0, 345 MHz, 2619 MHz, 0 %, 0 MiB, 71.62 W, 28, 0x0000000000000001
+2026/10/04 15:19:57.475, 0, 345 MHz, 2619 MHz, 0 %, 0 MiB, 71.56 W, 28, 0x0000000000000001
+2026/10/04 15:19:59.481, 0, 345 MHz, 2619 MHz, 0 %, 4 MiB, 71.62 W, 28, 0x0000000000000001
+2026/10/04 15:20:01.487, 0, 345 MHz, 2619 MHz, 0 %, 4 MiB, 71.63 W, 28, 0x0000000000000001
+2026/10/04 15:20:03.493, 0, 345 MHz, 2619 MHz, 0 %, 4 MiB, 71.61 W, 28, 0x0000000000000001
+2026/10/04 15:20:05.499, 0, 345 MHz, 2619 MHz, 0 %, 4 MiB, 71.57 W, 28, 0x0000000000000001

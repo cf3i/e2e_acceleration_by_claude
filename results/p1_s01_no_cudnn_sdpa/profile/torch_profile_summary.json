@@ -1,0 +1,41 @@
+{
+  "profiled_tasks": 1,
+  "wall_s_with_profiler": 17.662699637934566,
+  "gpu_kernel_busy_s": 5.308515737000176,
+  "gpu_busy_ratio": 0.30054951087992016,
+  "kernels": 938990,
+  "gen_tokens": 159,
+  "kernels_per_generated_token": 5905.597484276729,
+  "breakdown_with_profiler": {
+    "decode": {
+      "seconds": 16.33929950557649,
+      "count": 2,
+      "frac": 0.9250737339429258
+    },
+    "prefill": {
+      "seconds": 1.2315542306751013,
+      "count": 2,
+      "frac": 0.06972627378150424
+    },
+    "tool": {
+      "seconds": 0.08233596011996269,
+      "count": 1,
+      "frac": 0.004661572795085524
+    },
+    "template": {
+      "seconds": 0.007615571841597557,
+      "count": 2,
+      "frac": 0.000431166922254706
+    },
+    "other": {
+      "seconds": 0.0014697499573230743,
+      "count": 0,
+      "frac": 8.321207898290136e-05
+    },
+    "detokenize": {
+      "seconds": 0.00042461976408958435,
+      "count": 2,
+      "frac": 2.4040479246876803e-05
+    }
+  }
+}

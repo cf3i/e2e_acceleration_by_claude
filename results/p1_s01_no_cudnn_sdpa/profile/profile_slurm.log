@@ -1,0 +1,229 @@
+== torch.profiler
+The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+Loading weights:   0%|          | 0/851 [00:00<?, ?it/s]Loading weights:   7%|▋         | 57/851 [00:00<00:01, 506.11it/s]Loading weights:  13%|█▎        | 108/851 [00:00<00:02, 369.23it/s]Loading weights:  17%|█▋        | 147/851 [00:00<00:02, 306.32it/s]Loading weights:  21%|██▏       | 181/851 [00:00<00:02, 316.12it/s]Loading weights:  25%|██▌       | 214/851 [00:00<00:02, 311.13it/s]Loading weights:  31%|███       | 263/851 [00:00<00:01, 357.47it/s]Loading weights:  35%|███▌      | 300/851 [00:00<00:01, 338.35it/s]Loading weights:  40%|███▉      | 337/851 [00:00<00:01, 341.79it/s]Loading weights:  44%|████▎     | 372/851 [00:01<00:01, 340.21it/s]Loading weights:  48%|████▊     | 408/851 [00:01<00:01, 338.47it/s]Loading weights:  52%|█████▏    | 443/851 [00:01<00:01, 316.32it/s]Loading weights:  56%|█████▌    | 476/851 [00:01<00:01, 287.65it/s]Loading weights:  61%|██████    | 518/851 [00:01<00:01, 317.20it/s]Loading weights:  65%|██████▍   | 551/851 [00:01<00:00, 305.23it/s]Loading weights:  70%|██████▉   | 595/851 [00:01<00:00, 334.61it/s]Loading weights:  74%|███████▍  | 630/851 [00:01<00:00, 333.79it/s]Loading weights:  78%|███████▊  | 664/851 [00:02<00:00, 313.16it/s]Loading weights:  82%|████████▏ | 696/851 [00:02<00:00, 293.36it/s]Loading weights:  87%|████████▋ | 737/851 [00:02<00:00, 303.88it/s]Loading weights:  91%|█████████ | 771/851 [00:02<00:00, 313.03it/s]Loading weights:  96%|█████████▌| 816/851 [00:02<00:00, 336.44it/s]Loading weights: 100%|██████████| 851/851 [00:02<00:00, 331.56it/s]
+/mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torch/profiler/profiler.py:224: UserWarning: Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True.
+  _warn_once(
+{
+  "profiled_tasks": 1,
+  "wall_s_with_profiler": 17.662699637934566,
+  "gpu_kernel_busy_s": 5.308515737000176,
+  "gpu_busy_ratio": 0.30054951087992016,
+  "kernels": 938990,
+  "gen_tokens": 159,
+  "kernels_per_generated_token": 5905.597484276729,
+  "breakdown_with_profiler": {
+    "decode": {
+      "seconds": 16.33929950557649,
+      "count": 2,
+      "frac": 0.9250737339429258
+    },
+    "prefill": {
+      "seconds": 1.2315542306751013,
+      "count": 2,
+      "frac": 0.06972627378150424
+    },
+    "tool": {
+      "seconds": 0.08233596011996269,
+      "count": 1,
+      "frac": 0.004661572795085524
+    },
+    "template": {
+      "seconds": 0.007615571841597557,
+      "count": 2,
+      "frac": 0.000431166922254706
+    },
+    "other": {
+      "seconds": 0.0014697499573230743,
+      "count": 0,
+      "frac": 8.321207898290136e-05
+    },
+    "detokenize": {
+      "seconds": 0.00042461976408958435,
+      "count": 2,
+      "frac": 2.4040479246876803e-05
+    }
+  }
+}
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                               aten::mm        10.02%        1.320s        14.05%        1.851s      23.130us        3.128s        58.92%        3.129s      39.101us         80017  
+                      nvjet_tst_192x8_64x8_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us        1.277s        24.06%        1.277s      62.763us         20352  
+                      nvjet_tst_64x8_64x16_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us        1.196s        22.54%        1.196s      39.186us         30528  
+                                            aten::copy_         5.86%     771.892ms        16.09%        2.120s       8.810us     655.879ms        12.36%     655.948ms       2.727us        240569  
+                                              aten::mul         6.88%     906.052ms        13.43%        1.769s       9.188us     501.811ms         9.45%     501.860ms       2.606us        192564  
+void at::native::unrolled_elementwise_kernel<at::nat...         0.00%       0.000us         0.00%       0.000us       0.000us     357.442ms         6.73%     357.442ms       3.011us        118722  
+                     nvjet_tst_128x8_64x12_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us     284.421ms         5.36%     284.421ms      37.267us          7632  
+void at::native::elementwise_kernel<128, 2, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us     268.925ms         5.07%     268.925ms       3.104us         86627  
+                                              aten::add         4.55%     598.902ms         8.74%        1.152s       9.289us     227.627ms         4.29%     227.650ms       1.836us        123987  
+                                              aten::sum         2.08%     274.312ms         3.45%     453.907ms      12.345us     169.554ms         3.19%     169.568ms       4.612us         36768  
+                      nvjet_tst_512x8_64x3_2x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us     135.739ms         2.56%     135.739ms     843.099us           161  
+                                             aten::mean         1.81%     238.163ms         3.02%     397.405ms      11.810us     122.563ms         2.31%     122.574ms       3.643us         33649  
+void at::native::reduce_kernel<512, 1, at::native::R...         0.00%       0.000us         0.00%       0.000us       0.000us     122.563ms         2.31%     122.563ms       3.642us         33649  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us     100.348ms         1.89%     100.348ms       1.685us         59570  
+void at::native::reduce_kernel<128, 4, at::native::R...         0.00%       0.000us         0.00%       0.000us       0.000us      95.771ms         1.80%      95.771ms       5.701us         16800  
+void at::native::vectorized_elementwise_kernel<8, at...         0.00%       0.000us         0.00%       0.000us       0.000us      95.472ms         1.80%      95.472ms       1.670us         57155  
+void at::native::elementwise_kernel<128, 4, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us      94.180ms         1.77%      94.180ms       2.812us         33488  
+                                            aten::rsqrt         1.56%     204.911ms         3.24%     426.725ms       8.690us      86.549ms         1.63%      86.565ms       1.763us         49105  
+               nvjet_tst_64x8_64x16_1x1_v_bz_splitK_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      85.995ms         1.62%      85.995ms       5.634us         15264  
+void at::native::elementwise_kernel<128, 4, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us      83.522ms         1.57%      83.522ms       3.191us         26176  
+                                              aten::cat         1.31%     172.141ms         2.31%     304.382ms      13.092us      78.856ms         1.49%      78.869ms       3.392us         23249  
+                                             aten::silu         1.19%     156.826ms         2.25%     296.387ms      11.506us      64.979ms         1.22%      64.986ms       2.523us         25760  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      61.965ms         1.17%      61.965ms       1.842us         33649  
+void at::native::elementwise_kernel<128, 2, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us      57.758ms         1.09%      57.758ms       2.902us         19906  
+                                              aten::pow         1.87%     246.900ms         3.24%     427.167ms      12.695us      54.152ms         1.02%      54.155ms       1.609us         33649  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 13.173s
+Self CUDA time total: 5.309s
+
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                       cudaLaunchKernel        28.87%        3.803s        29.39%        3.872s       4.618us       0.000us         0.00%     102.655us       0.000us        838423  
+                                               aten::mm        10.02%        1.320s        14.05%        1.851s      23.130us        3.128s        58.92%        3.129s      39.101us         80017  
+                                              aten::mul         6.88%     906.052ms        13.43%        1.769s       9.188us     501.811ms         9.45%     501.860ms       2.606us        192564  
+                                            aten::copy_         5.86%     771.892ms        16.09%        2.120s       8.810us     655.879ms        12.36%     655.948ms       2.727us        240569  
+                                              aten::add         4.55%     598.902ms         8.74%        1.152s       9.289us     227.627ms         4.29%     227.650ms       1.836us        123987  
+                                    aten::empty_strided         4.03%     530.400ms         4.03%     530.400ms       2.736us       0.000us         0.00%       0.000us       0.000us        193895  
+                                       cuLaunchKernelEx         3.23%     425.590ms         3.25%     427.876ms       5.347us       0.000us         0.00%     364.321us       0.005us         80017  
+                                         aten::_to_copy         2.26%     297.663ms        17.88%        2.356s      13.173us       0.000us         0.00%     485.179ms       2.713us        178839  
+                                              aten::sum         2.08%     274.312ms         3.45%     453.907ms      12.345us     169.554ms         3.19%     169.568ms       4.612us         36768  
+                                              aten::pow         1.87%     246.900ms         3.24%     427.167ms      12.695us      54.152ms         1.02%      54.155ms       1.609us         33649  
+                                        cudaMemcpyAsync         1.84%     242.425ms         1.85%     243.172ms      15.227us       0.000us         0.00%       1.856us       0.000us         15970  
+                                             aten::mean         1.81%     238.163ms         3.02%     397.405ms      11.810us     122.563ms         2.31%     122.574ms       3.643us         33649  
+                                           aten::matmul         1.64%     215.449ms        17.41%        2.293s      27.199us       0.000us         0.00%        3.163s      37.514us         84306  
+                                            aten::rsqrt         1.56%     204.911ms         3.24%     426.725ms       8.690us      86.549ms         1.63%      86.565ms       1.763us         49105  
+                                  cudaStreamSynchronize         1.45%     191.257ms         1.45%     191.257ms      23.759us       0.000us         0.00%       0.000us       0.000us          8050  
+                                       aten::as_strided         1.38%     181.335ms         1.38%     181.335ms       0.362us       0.000us         0.00%       0.000us       0.000us        500398  
+                                              aten::cat         1.31%     172.141ms         2.31%     304.382ms      13.092us      78.856ms         1.49%      78.869ms       3.392us         23249  
+                                            aten::empty         1.30%     170.728ms         1.30%     170.728ms       3.346us       0.000us         0.00%       0.000us       0.000us         51027  
+                                             aten::silu         1.19%     156.826ms         2.25%     296.387ms      11.506us      64.979ms         1.22%      64.986ms       2.523us         25760  
+                                               aten::to         1.09%     142.942ms        18.97%        2.499s      10.581us       0.000us         0.00%     485.179ms       2.054us        236155  
+                                Activity Buffer Request         1.08%     141.794ms         1.08%     141.794ms       1.818ms     218.432us         0.00%     218.432us       2.800us            78  
+                                        aten::transpose         1.04%     136.644ms         1.54%     203.300ms       1.183us       0.000us         0.00%       0.000us       0.000us        171874  
+                                                aten::t         0.83%     109.804ms         1.64%     216.507ms       2.706us       0.000us         0.00%       0.000us       0.000us         80017  
+                                           aten::linear         0.78%     103.229ms        18.76%        2.471s      30.882us       0.000us         0.00%        3.129s      39.101us         80017  
+                                          aten::reshape         0.74%      97.552ms         1.54%     203.289ms       1.278us       0.000us         0.00%       9.801ms       0.062us        159013  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 13.173s
+Self CUDA time total: 5.309s
+
+== nsys
+WARNING: Device-side CUDA Event completion trace is currently enabled.
+         This may increase runtime overhead and the likelihood of false
+         dependencies across CUDA Streams. If you wish to avoid this, please
+         disable the feature with --cuda-event-trace=false.
+The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+Loading weights:   0%|          | 0/851 [00:00<?, ?it/s]Loading weights:  72%|███████▏  | 615/851 [00:00<00:00, 6109.74it/s]Loading weights: 100%|██████████| 851/851 [00:00<00:00, 7262.22it/s]
+engine loaded in 30.9s
+[rep 0] makespan=63.5s acc=1.000 gen_tok=621 decode=95.16ms/tok
+{
+  "stage": "p1_s01_no_cudnn_sdpa",
+  "engine": "p1_s01",
+  "engine_options": {
+    "linear_attn_fast_path": false,
+    "cudnn_sdpa": false
+  },
+  "runner": "serial",
+  "config": {
+    "engine": "p1_s01",
+    "runner": "serial",
+    "num_tasks": 4,
+    "repeats": 1,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "device": "cuda"
+  },
+  "load_s": 30.880454540252686,
+  "makespan_s_all": [
+    63.50142911821604
+  ],
+  "makespan_s": 63.50142911821604,
+  "tasks": 4,
+  "accuracy": 1.0,
+  "tasks_per_min": 3.779442499683106,
+  "turns": 8,
+  "tool_calls": 4,
+  "gen_tokens": 621,
+  "prompt_tokens": 3882,
+  "redundant_prefill_tokens": 2133,
+  "gen_tok_per_s_e2e": 9.779307467930037,
+  "decode_ms_per_token": 95.15706878489713,
+  "prefill_tok_per_s": 855.211165728369,
+  "task_latency_p50_s": 16.87909684330225,
+  "task_latency_p90_s": 22.410204406827688,
+  "finish_reasons": {
+    "answer": 4
+  },
+  "peak_mem_gb": 50.47649431228638
+}
+breakdown (median rep):
+  decode           58.33s   91.9%  n=8
+  prefill           4.54s    7.1%  n=8
+  tool              0.60s    0.9%  n=4
+  template          0.02s    0.0%  n=8
+  other             0.01s    0.0%  n=0
+  detokenize        0.00s    0.0%  n=8
+Collecting data...
+Generating '/home/feic/.cache/codex-tmp/nsys-report-cbad.qdstrm'
+[1/1] [0%                          ] nsys.nsys-rep[1/1] [0%                          ] nsys.nsys-rep[1/1] [7%                          ] nsys.nsys-rep[1/1] [10%                         ] nsys.nsys-rep[1/1] [11%                         ] nsys.nsys-rep[1/1] [12%                         ] nsys.nsys-rep[1/1] [13%                         ] nsys.nsys-rep[1/1] [8%                          ] nsys.nsys-rep[1/1] [9%                          ] nsys.nsys-rep[1/1] [10%                         ] nsys.nsys-rep[1/1] [11%                         ] nsys.nsys-rep[1/1] [6%                          ] nsys.nsys-rep[1/1] [0%                          ] nsys.nsys-rep[1/1] [5%                          ] nsys.nsys-rep[1/1] [6%                          ] nsys.nsys-rep[1/1] [7%                          ] nsys.nsys-rep[1/1] [8%                          ] nsys.nsys-rep[1/1] [9%                          ] nsys.nsys-rep[1/1] [10%                         ] nsys.nsys-rep[1/1] [11%                         ] nsys.nsys-rep[1/1] [12%                         ] nsys.nsys-rep[1/1] [13%                         ] nsys.nsys-rep[1/1] [14%                         ] nsys.nsys-rep[1/1] [=15%                        ] nsys.nsys-rep[1/1] [=16%                        ] nsys.nsys-rep[1/1] [=17%                        ] nsys.nsys-rep[1/1] [==18%                       ] nsys.nsys-rep[1/1] [==19%                       ] nsys.nsys-rep[1/1] [==20%                       ] nsys.nsys-rep[1/1] [==21%                       ] nsys.nsys-rep[1/1] [===22%                      ] nsys.nsys-rep[1/1] [===23%                      ] nsys.nsys-rep[1/1] [===24%                      ] nsys.nsys-rep[1/1] [====25%                     ] nsys.nsys-rep[1/1] [====26%                     ] nsys.nsys-rep[1/1] [====27%                     ] nsys.nsys-rep[1/1] [====28%                     ] nsys.nsys-rep[1/1] [=====29%                    ] nsys.nsys-rep[1/1] [=====30%                    ] nsys.nsys-rep[1/1] [=====31%                    ] nsys.nsys-rep[1/1] [=====32%                    ] nsys.nsys-rep[1/1] [======33%                   ] nsys.nsys-rep[1/1] [======34%                   ] nsys.nsys-rep[1/1] [======35%                   ] nsys.nsys-rep[1/1] [=======36%                  ] nsys.nsys-rep[1/1] [=======37%                  ] nsys.nsys-rep[1/1] [=======38%                  ] nsys.nsys-rep[1/1] [=======39%                  ] nsys.nsys-rep[1/1] [========40%                 ] nsys.nsys-rep[1/1] [========41%                 ] nsys.nsys-rep[1/1] [========42%                 ] nsys.nsys-rep[1/1] [=========43%                ] nsys.nsys-rep[1/1] [=========44%                ] nsys.nsys-rep[1/1] [=========45%                ] nsys.nsys-rep[1/1] [=========46%                ] nsys.nsys-rep[1/1] [==========47%               ] nsys.nsys-rep[1/1] [==========48%               ] nsys.nsys-rep[1/1] [==========49%               ] nsys.nsys-rep[1/1] [===========50%              ] nsys.nsys-rep[1/1] [===========51%              ] nsys.nsys-rep[1/1] [===========52%              ] nsys.nsys-rep[1/1] [===========53%              ] nsys.nsys-rep[1/1] [============54%             ] nsys.nsys-rep[1/1] [============55%             ] nsys.nsys-rep[1/1] [============56%             ] nsys.nsys-rep[1/1] [============57%             ] nsys.nsys-rep[1/1] [=============58%            ] nsys.nsys-rep[1/1] [=============59%            ] nsys.nsys-rep[1/1] [=============60%            ] nsys.nsys-rep[1/1] [==============61%           ] nsys.nsys-rep[1/1] [==============62%           ] nsys.nsys-rep[1/1] [==============63%           ] nsys.nsys-rep[1/1] [==============64%           ] nsys.nsys-rep[1/1] [===============65%          ] nsys.nsys-rep[1/1] [===============66%          ] nsys.nsys-rep[1/1] [===============67%          ] nsys.nsys-rep[1/1] [================68%         ] nsys.nsys-rep[1/1] [================69%         ] nsys.nsys-rep[1/1] [================70%         ] nsys.nsys-rep[1/1] [================71%         ] nsys.nsys-rep[1/1] [=================72%        ] nsys.nsys-rep[1/1] [=================73%        ] nsys.nsys-rep[1/1] [=================74%        ] nsys.nsys-rep[1/1] [==================75%       ] nsys.nsys-rep[1/1] [==================76%       ] nsys.nsys-rep[1/1] [========================100%] nsys.nsys-rep[1/1] [========================100%] nsys.nsys-rep
+Generated:
+	/mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/runs/p1_s01_no_cudnn_sdpa-profile-4684213-1004-140244/results/p1_s01_no_cudnn_sdpa/profile/nsys.nsys-rep
+
+## NVTX ranges (L1 sections): total 78.40s over 45 instances
+ time%   total_s     count    avg_us  name
+  91.3    71.586        10 7158561.1  :decode
+   7.7     6.019        10  601889.6  :prefill
+   0.9     0.741         5  148161.1  :tool
+   0.1     0.056        10    5587.0  :template
+   0.0     0.002        10     234.4  :detokenize
+
+## GPU kernels: total 25.84s over 4570514 instances
+ time%   total_s     count    avg_us  name
+  24.5     6.326    100736      62.8  nvjet_tst_192x8_64x8_4x1_v_bz_TNT
+  22.8     5.899    151104      39.0  nvjet_tst_64x8_64x16_4x1_v_bz_TNT
+   6.7     1.736    587706       3.0  void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[l
+   5.4     1.406     37776      37.2  nvjet_tst_128x8_64x12_4x1_v_bz_TNT
+   5.2     1.341    429479       3.1  void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::Bina
+   2.6     0.669       797     839.4  nvjet_tst_512x8_64x3_2x1_v_bz_TNT
+   2.3     0.590    166573       3.5  void at::native::reduce_kernel<(int)512, (int)1, at::native::ReduceOp<float, at::native::MeanOps<float, float,
+   1.8     0.478     83232       5.7  void at::native::reduce_kernel<(int)128, (int)4, at::native::ReduceOp<float, at::native::func_wrapper_t<float,
+   1.8     0.471    294890       1.6  void at::native::vectorized_elementwise_kernel<(int)4, at::native::CUDAFunctorOnSelf_add<float>, std::array<ch
+   1.8     0.469    165776       2.8  void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::Bina
+   1.7     0.443    282935       1.6  void at::native::vectorized_elementwise_kernel<(int)8, at::native::bfloat16_copy_kernel_cuda(at::TensorIterato
+   1.6     0.424     75552       5.6  nvjet_tst_64x8_64x16_1x1_v_bz_splitK_TNT
+   1.6     0.421    129600       3.2  void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::dire
+   1.2     0.304    166573       1.8  void at::native::vectorized_elementwise_kernel<(int)4, at::native::rsqrt_kernel_cuda(at::TensorIteratorBase &)
+   1.1     0.291     99562       2.9  void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::dire
+   1.0     0.268    166573       1.6  void at::native::vectorized_elementwise_kernel<(int)4, void at::native::<unnamed>::pow_tensor_scalar_kernel_im
+   1.0     0.249    127200       2.0  void at::native::vectorized_elementwise_kernel<(int)8, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<
+   1.0     0.248    140272       1.8  void at::native::vectorized_elementwise_kernel<(int)8, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16,
+   0.9     0.236    113568       2.1  void at::native::vectorized_elementwise_kernel<(int)4, at::native::CUDAFunctor_add<float>, std::array<char *, 
+   0.9     0.233     76512       3.0  void at::native::reduce_kernel<(int)512, (int)1, at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_
+   0.8     0.211    140259       1.5  void at::native::vectorized_elementwise_kernel<(int)4, at::native::BinaryFunctor<float, float, float, at::nati
+   0.8     0.203    101696       2.0  void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)0,
+   0.7     0.177     51328       3.4  void at::native::<unnamed>::CatArrayBatchedCopy<at::native::<unnamed>::OpaqueType<(unsigned int)2>, unsigned i
+   0.7     0.171     25184       6.8  nvjet_tst_64x8_64x16_4x1_v_bz_splitK_TNT
+   0.6     0.167     38256       4.4  void at::native::<unnamed>::conv_depthwise2d_forward_kernel_generic<c10::BFloat16, int>(torch::headeronly::det
+
+## CUDA API (host side): total 44.68s over 5528749 instances
+ time%   total_s     count    avg_us  name
+  46.4    20.720     79919     259.3  cudaMemcpyAsync
+  44.8    20.031   4153515       4.8  cudaLaunchKernel
+   4.8     2.153    396109       5.4  cuLaunchKernelEx
+   2.2     0.975     40703      24.0  cudaStreamSynchronize
+   1.1     0.487       478    1018.8  cudaMalloc
+   0.3     0.113     20890       5.4  cudaLaunchKernelExC_v11060
+   0.2     0.087    792218       0.1  cuKernelGetAttribute
+   0.1     0.042     41178       1.0  cudaStreamIsCapturing_v10000
+   0.1     0.040        49     814.0  cuLibraryLoadData
+   0.0     0.021      2618       8.1  cudaMemsetAsync
+   0.0     0.005         1    4792.3  cudaFree
+   0.0     0.005         2    2322.3  cudaGetDeviceProperties_v2_v12000
+
+## GPU memcpy/memset: total 19.76s over 82537 instances
+ time%   total_s     count    avg_us  name
+  99.7    19.697     39906     493.6  [CUDA memcpy Host-to-Device]
+   0.3     0.061     39216       1.5  [CUDA memcpy Device-to-Device]
+   0.0     0.002       797       2.5  [CUDA memcpy Device-to-Host]
+   0.0     0.002      2618       0.8  [CUDA memset]

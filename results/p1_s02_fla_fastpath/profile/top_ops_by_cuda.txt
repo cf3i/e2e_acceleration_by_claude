@@ -1,0 +1,46 @@
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg     Self CUDA   Self CUDA %    CUDA total  CUDA time avg    # of Calls  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+                                               aten::mm        11.71%        1.227s        16.72%        1.752s      23.046us        2.949s        74.07%        2.950s      38.791us         76041  
+                      nvjet_tst_192x8_64x8_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us        1.209s        30.36%        1.209s      62.545us         19328  
+                      nvjet_tst_64x8_64x16_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us        1.119s        28.10%        1.119s      38.591us         28992  
+                                            aten::copy_         4.07%     426.021ms         9.42%     986.636ms       8.627us     295.048ms         7.41%     295.070ms       2.580us        114369  
+                     nvjet_tst_128x8_64x12_4x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us     270.271ms         6.79%     270.271ms      37.289us          7248  
+void at::native::unrolled_elementwise_kernel<at::nat...         0.00%       0.000us         0.00%       0.000us       0.000us     181.997ms         4.57%     181.997ms       2.959us         61506  
+                                              aten::mul         3.50%     367.118ms         6.96%     729.399ms       9.239us     163.831ms         4.12%     163.846ms       2.075us         78948  
+                                              aten::add         4.00%     419.643ms         7.57%     792.906ms       9.760us     141.063ms         3.54%     141.079ms       1.737us         81243  
+                      nvjet_tst_512x8_64x3_2x1_v_bz_TNT         0.00%       0.000us         0.00%       0.000us       0.000us     128.175ms         3.22%     128.175ms     837.742us           153  
+                                             aten::mean         1.89%     198.208ms         3.06%     320.533ms      13.012us      88.075ms         2.21%      88.078ms       3.576us         24633  
+void at::native::reduce_kernel<512, 1, at::native::R...         0.00%       0.000us         0.00%       0.000us       0.000us      88.075ms         2.21%      88.075ms       3.575us         24633  
+               nvjet_tst_64x8_64x16_1x1_v_bz_splitK_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      80.282ms         2.02%      80.282ms       5.538us         14496  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      77.603ms         1.95%      77.603ms       1.575us         49266  
+void at::native::elementwise_kernel<128, 2, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us      73.643ms         1.85%      73.643ms       2.464us         29883  
+void at::native::vectorized_elementwise_kernel<8, at...         0.00%       0.000us         0.00%       0.000us       0.000us      51.816ms         1.30%      51.816ms       1.605us         32283  
+                                              aten::cat         0.82%      85.682ms         1.52%     158.772ms      10.698us      49.319ms         1.24%      49.319ms       3.323us         14841  
+void at::native::elementwise_kernel<128, 4, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us      48.789ms         1.23%      48.789ms       2.826us         17264  
+void at::native::vectorized_elementwise_kernel<8, at...         0.00%       0.000us         0.00%       0.000us       0.000us      47.634ms         1.20%      47.634ms       1.951us         24416  
+                                            aten::rsqrt         0.99%     103.990ms         2.10%     219.870ms       8.926us      44.902ms         1.13%      44.907ms       1.823us         24633  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      44.902ms         1.13%      44.902ms       1.823us         24633  
+                                              aten::pow         1.77%     185.225ms         3.12%     327.371ms      13.290us      40.007ms         1.00%      40.011ms       1.624us         24633  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      40.007ms         1.00%      40.007ms       1.624us         24633  
+void at::native::vectorized_elementwise_kernel<4, at...         0.00%       0.000us         0.00%       0.000us       0.000us      39.483ms         0.99%      39.483ms       1.477us         26727  
+void cublasLt::splitKreduce_kernel<32, 16, int, floa...         0.00%       0.000us         0.00%       0.000us       0.000us      38.379ms         0.96%      38.379ms       1.966us         19520  
+void at::native::(anonymous namespace)::CatArrayBatc...         0.00%       0.000us         0.00%       0.000us       0.000us      33.896ms         0.85%      33.896ms       3.439us          9856  
+                                 FusedRecurrentFunction         9.12%     956.184ms        10.32%        1.081s     149.212us      33.291ms         0.84%      33.309ms       4.596us          7248  
+            fused_recurrent_gated_delta_rule_fwd_kernel         0.00%       0.000us         0.00%       0.000us       0.000us      33.291ms         0.84%      33.291ms       4.593us          7248  
+               nvjet_tst_64x8_64x16_4x1_v_bz_splitK_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      32.859ms         0.83%      32.859ms       6.800us          4832  
+                         aten::_flash_attention_forward         0.45%      46.674ms         1.35%     141.666ms      57.870us      27.941ms         0.70%      27.953ms      11.419us          2448  
+                    DaoAILab::_causal_conv1d_update_cpp         3.39%     355.769ms         3.85%     403.027ms      55.605us      27.742ms         0.70%      27.742ms       3.828us          7248  
+void causal_conv1d_update_kernel<Causal_conv1d_updat...         0.00%       0.000us         0.00%       0.000us       0.000us      27.742ms         0.70%      27.742ms       3.828us          7248  
+void at::native::vectorized_elementwise_kernel<8, at...         0.00%       0.000us         0.00%       0.000us       0.000us      25.659ms         0.64%      25.659ms       2.096us         12240  
+void at::native::elementwise_kernel<128, 4, at::nati...         0.00%       0.000us         0.00%       0.000us       0.000us      24.609ms         0.62%      24.609ms       2.513us          9792  
+                                             aten::silu         0.64%      66.684ms         1.20%     126.223ms      12.890us      23.355ms         0.59%      23.360ms       2.386us          9792  
+void at::native::vectorized_elementwise_kernel<8, at...         0.00%       0.000us         0.00%       0.000us       0.000us      23.355ms         0.59%      23.355ms       2.385us          9792  
+                                              aten::neg         0.65%      67.683ms         1.28%     134.610ms      10.998us      21.238ms         0.53%      21.241ms       1.735us         12240  
+              nvjet_tst_384x104_64x3_2x1_v_bz_coopA_TNT         0.00%       0.000us         0.00%       0.000us       0.000us      20.414ms         0.51%      20.414ms     159.481us           128  
+                                          aten::sigmoid         0.68%      70.980ms         1.25%     131.060ms      13.384us      19.193ms         0.48%      19.193ms       1.960us          9792  
+void at::native::vectorized_elementwise_kernel<8, at...         0.00%       0.000us         0.00%       0.000us       0.000us      19.193ms         0.48%      19.193ms       1.960us          9792  
+                                 LayerNormGatedFunction         9.51%     997.044ms        10.91%        1.144s     155.739us      17.612ms         0.44%      17.620ms       2.399us          7344  
+-------------------------------------------------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  ------------  
+Self CPU time total: 10.479s
+Self CUDA time total: 3.981s

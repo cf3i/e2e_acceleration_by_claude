@@ -1,0 +1,8 @@
+{"task_id": 23, "turn": 1, "prompt_len": 401, "gen_len": 107, "prefill_s": 0.12305510276928544, "decode_s": 8.499061757232994, "tool_s": 0.12508317595347762, "stopped": true}
+{"task_id": 23, "turn": 2, "prompt_len": 527, "gen_len": 59, "prefill_s": 0.12887592427432537, "decode_s": 4.821537810843438, "tool_s": 0.0, "stopped": true}
+{"task_id": 51, "turn": 1, "prompt_len": 410, "gen_len": 85, "prefill_s": 0.14504586718976498, "decode_s": 6.844621455762535, "tool_s": 0.10634475015103817, "stopped": true}
+{"task_id": 51, "turn": 2, "prompt_len": 516, "gen_len": 66, "prefill_s": 0.1454041190445423, "decode_s": 5.47947157593444, "tool_s": 0.0, "stopped": true}
+{"task_id": 68, "turn": 1, "prompt_len": 398, "gen_len": 64, "prefill_s": 0.13924506399780512, "decode_s": 5.216443723998964, "tool_s": 0.10816642921417952, "stopped": true}
+{"task_id": 68, "turn": 2, "prompt_len": 484, "gen_len": 6, "prefill_s": 0.14767457637935877, "decode_s": 0.5228069461882114, "tool_s": 0.0, "stopped": true}
+{"task_id": 76, "turn": 1, "prompt_len": 447, "gen_len": 221, "prefill_s": 0.15445237280800939, "decode_s": 17.87027969583869, "tool_s": 0.11933178128674626, "stopped": true}
+{"task_id": 76, "turn": 2, "prompt_len": 699, "gen_len": 5, "prefill_s": 0.1363775748759508, "decode_s": 0.40802139695733786, "tool_s": 0.0, "stopped": true}
