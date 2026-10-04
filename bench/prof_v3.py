@@ -41,6 +41,7 @@ def main():
     ap.add_argument("--ctx", type=int, default=1000)
     ap.add_argument("--chunks", default="2048")
     ap.add_argument("--steps", type=int, default=5)
+    ap.add_argument("--pos0", type=int, default=0, help="prefill: chunks continue sessions with this much context")
     args = ap.parse_args()
     eng = V3Engine(num_slots=128, token_budget=8192)
     tok = list(range(1000, 1000 + args.ctx))
@@ -51,11 +52,22 @@ def main():
         eng.step()
     chunks = [int(c) for c in args.chunks.split(",")] if args.case == "prefill" else []
 
+    if args.pos0:
+        for j in range(len(chunks)):
+            eng.submit(127 - j, list(range(3000, 3000 + args.pos0)), 0)
+        while any(eng.sessions[127 - j].phase != 0 for j in range(len(chunks))):
+            eng.step()
+        eng.drain()
+
     def one_step():
         for j, c in enumerate(chunks):
             slot = 127 - j
-            eng.release(slot)
-            eng.submit(slot, list(range(2000, 2000 + c)), 10**6)
+            if args.pos0:  # continue the session (context grows by c per step)
+                s = eng.sessions[slot]
+                eng.submit(slot, s.hist + list(range(2000, 2000 + c)), 0)
+            else:
+                eng.release(slot)
+                eng.submit(slot, list(range(2000, 2000 + c)), 10**6)
         eng.step()
 
     for _ in range(3):
@@ -66,7 +78,7 @@ def main():
         one_step()
     torch.cuda.synchronize()
     print(f"wall per step: {(time.perf_counter() - t0) / args.steps * 1e3:.2f} ms  ({args.case}, B={args.B}, "
-          f"ctx={args.ctx}, chunks={chunks})")
+          f"ctx={args.ctx}, chunks={chunks}, pos0={args.pos0})")
     with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA]) as prof:
         for _ in range(args.steps):
             one_step()

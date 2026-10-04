@@ -16,6 +16,54 @@ import triton.language as tl
 FP8 = torch.float8_e4m3fn
 
 
+# ---------------------------------------------------------------- FP8 GEMM for small M (merged weights)
+# y[:, n] = (x @ W^T)[:, n] * s[n]: W is several linears sharing an input stacked along N (each keeps its own
+# per-tensor scale, repeated in s), so one launch streams all of them. Small M is weight-read bound: narrow N tiles
+# give enough programs to fill the GPU, full-K loop, no split. For large M the per-linear cuBLAS calls are faster.
+@triton.jit
+def _mm_fp8_kernel(x_ptr, w_ptr, s_ptr, y_ptr, M, N, K: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,
+                   BK: tl.constexpr, STAGES: tl.constexpr):
+    m = tl.program_id(1) * BM + tl.arange(0, BM)
+    n = tl.program_id(0) * BN + tl.arange(0, BN)
+    mm = m < M
+    nm = n < N
+    acc = tl.zeros((BM, BN), tl.float32)
+    for k0 in tl.range(0, K, BK, num_stages=STAGES):
+        k = k0 + tl.arange(0, BK)
+        x = tl.load(x_ptr + m.to(tl.int64)[:, None] * K + k[None, :], mask=mm[:, None], other=0.0)
+        w = tl.load(w_ptr + n.to(tl.int64)[:, None] * K + k[None, :], mask=nm[:, None], other=0.0)
+        # fp8 wgmma accumulates with reduced precision: promote to fp32 every 128 products (as cuBLAS does)
+        acc = tl.dot(x, tl.trans(w), acc, max_num_imprecise_acc=128)
+    s = tl.load(s_ptr + n, mask=nm, other=0.0)
+    tl.store(y_ptr + m.to(tl.int64)[:, None] * N + n[None, :], (acc * s[None, :]).to(tl.bfloat16),
+             mask=mm[:, None] & nm[None, :])
+
+
+def mm_fp8_cfg(M, N):
+    """Tile config by M (sweep: scratch/mm_merge.py, K = 5120); None: use cuBLAS."""
+    wide = N > 24576
+    if M <= 16:
+        return dict(BM=16, BN=64, BK=128, num_warps=4, STAGES=3) if wide else \
+            dict(BM=16, BN=32, BK=256, num_warps=4, STAGES=3)
+    if M <= 64:
+        return dict(BM=64, BN=128, BK=128, num_warps=4, STAGES=3) if wide else \
+            dict(BM=64, BN=64, BK=256, num_warps=4, STAGES=3)
+    if M <= 128 and not wide:
+        return dict(BM=128, BN=64, BK=128, num_warps=4, STAGES=4)
+    return None
+
+
+def mm_fp8(x, w, s, cfg):
+    """x [M, K] fp8, w [N, K] fp8, s [N] fp32 -> [M, N] bf16."""
+    M, K = x.shape
+    N = w.shape[0]
+    y = torch.empty((M, N), dtype=torch.bfloat16, device=x.device)
+    c = dict(cfg)
+    BM, BN = c["BM"], c["BN"]
+    _mm_fp8_kernel[(triton.cdiv(N, BN), triton.cdiv(M, BM))](x, w, s, y, M, N, K=K, **c)
+    return y
+
+
 # ---------------------------------------------------------------- residual add + RMSNorm(1 + w) + quant
 @triton.jit
 def _add_rmsnorm_kernel(res_ptr, d_ptr, ds_ptr, w_ptr, q_ptr, s_ptr, out_ptr, N, eps,
@@ -59,23 +107,23 @@ def add_rmsnorm_quant(res, w1, eps, delta=None, dscale=None, quant=True):
 
 # ---------------------------------------------------------------- SiLU(gate) * up + quant (MLP)
 @triton.jit
-def _silu_mul_quant_kernel(g_ptr, u_ptr, xs_ptr, q_ptr, s_ptr, N, BLOCK: tl.constexpr):
+def _silu_mul_quant_kernel(g_ptr, u_ptr, xs_ptr, q_ptr, s_ptr, N, GS, BLOCK: tl.constexpr):
     row = tl.program_id(0).to(tl.int64)
     xs = tl.load(xs_ptr + row)
     amax = tl.zeros((BLOCK,), tl.float32)
     for off in range(0, N, BLOCK):  # pass 1: row amax
         offs = off + tl.arange(0, BLOCK)
         m = offs < N
-        g = (tl.load(g_ptr + row * N + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-        u = (tl.load(u_ptr + row * N + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+        g = (tl.load(g_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+        u = (tl.load(u_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
         h = (g * tl.sigmoid(g) * u).to(tl.bfloat16).to(tl.float32)
         amax = tl.maximum(amax, tl.abs(h))
     s = tl.maximum(tl.max(amax, 0), 1e-12) / 448.0
     for off in range(0, N, BLOCK):  # pass 2: quantize (the row is in L2)
         offs = off + tl.arange(0, BLOCK)
         m = offs < N
-        g = (tl.load(g_ptr + row * N + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-        u = (tl.load(u_ptr + row * N + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+        g = (tl.load(g_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+        u = (tl.load(u_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
         h = (g * tl.sigmoid(g) * u).to(tl.bfloat16).to(tl.float32)
         tl.store(q_ptr + row * N + offs, tl.clamp(h / s, -448.0, 448.0).to(tl.float8e4nv), mask=m)
     tl.store(s_ptr + row, s)
@@ -90,16 +138,17 @@ def _silu_mul_chunk(g_ptr, u_ptr, base, off, xs, CH: tl.constexpr):
 
 
 @triton.jit
-def _silu_mul_quant1_kernel(g_ptr, u_ptr, xs_ptr, q_ptr, s_ptr, N: tl.constexpr, CH: tl.constexpr,
+def _silu_mul_quant1_kernel(g_ptr, u_ptr, xs_ptr, q_ptr, s_ptr, GS, N: tl.constexpr, CH: tl.constexpr,
                             TAIL: tl.constexpr):
     """Single pass, the whole row (N = 2 CH + TAIL) in registers: the row is read once and the program has all
     its loads in flight at once (the two-pass loop is latency-bound for small T and re-reads rows for large T)."""
     row = tl.program_id(0).to(tl.int64)
     xs = tl.load(xs_ptr + row)
+    gb = row * GS
+    h0 = _silu_mul_chunk(g_ptr, u_ptr, gb, 0, xs, CH)
+    h1 = _silu_mul_chunk(g_ptr, u_ptr, gb, CH, xs, CH)
+    h2 = _silu_mul_chunk(g_ptr, u_ptr, gb, 2 * CH, xs, TAIL)
     base = row * N
-    h0 = _silu_mul_chunk(g_ptr, u_ptr, base, 0, xs, CH)
-    h1 = _silu_mul_chunk(g_ptr, u_ptr, base, CH, xs, CH)
-    h2 = _silu_mul_chunk(g_ptr, u_ptr, base, 2 * CH, xs, TAIL)
     amax = tl.maximum(tl.maximum(tl.max(tl.abs(h0), 0), tl.max(tl.abs(h1), 0)), tl.max(tl.abs(h2), 0))
     s = tl.maximum(amax, 1e-12) / 448.0
     tl.store(q_ptr + base + tl.arange(0, CH), tl.clamp(h0 / s, -448.0, 448.0).to(tl.float8e4nv))
@@ -109,15 +158,17 @@ def _silu_mul_quant1_kernel(g_ptr, u_ptr, xs_ptr, q_ptr, s_ptr, N: tl.constexpr,
 
 
 def silu_mul_quant(gate, up, xs):
+    """gate, up [T, N] with unit column stride and a common row stride (column slices of one GEMM output ok)."""
     T, N = gate.shape
+    assert up.stride(0) == gate.stride(0) and gate.stride(1) == up.stride(1) == 1
     q = torch.empty((T, N), dtype=FP8, device=gate.device)
     s = torch.empty((T,), dtype=torch.float32, device=gate.device)
     CH = 8192
     tail = N - 2 * CH
     if 0 < tail <= CH and tail & (tail - 1) == 0:
-        _silu_mul_quant1_kernel[(T,)](gate, up, xs, q, s, N=N, CH=CH, TAIL=tail, num_warps=16)
+        _silu_mul_quant1_kernel[(T,)](gate, up, xs, q, s, gate.stride(0), N=N, CH=CH, TAIL=tail, num_warps=16)
     else:
-        _silu_mul_quant_kernel[(T,)](gate, up, xs, q, s, N, BLOCK=4096, num_warps=8)
+        _silu_mul_quant_kernel[(T,)](gate, up, xs, q, s, N, gate.stride(0), BLOCK=4096, num_warps=8)
     return q, s
 
 
@@ -144,7 +195,7 @@ def _conv_out(acc, rows, rm, c0, q_out, k_out, v_out, QK: tl.constexpr, VC: tl.c
 
 
 @triton.jit
-def _conv1d_seq_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, seq_slot, seq_start, seq_len,
+def _conv1d_seq_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, seq_slot, seq_start, seq_len, XS,
                        QK: tl.constexpr, VC: tl.constexpr, BLOCK_C: tl.constexpr, DK: tl.constexpr):
     """One program per (sequence, channel block): walks the sequence's new tokens in order with the last 3 inputs
     in registers (initialized from the slot's conv state) and writes the new state. For decode (1 token/seq)."""
@@ -166,7 +217,7 @@ def _conv1d_seq_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, seq
         x2 = tl.load(st + 2 * C + offs).to(tl.float32)
         for t in range(n):
             row = t0 + t
-            xt = (tl.load(x_ptr + row.to(tl.int64) * C + offs).to(tl.float32)
+            xt = (tl.load(x_ptr + row.to(tl.int64) * XS + offs).to(tl.float32)
                   * tl.load(xs_ptr + row)).to(tl.bfloat16).to(tl.float32)
             acc = x0 * w0 + x1 * w1 + x2 * w2 + xt * w3
             _conv_out(acc[None, :], tl.full((1,), 0, tl.int32) + row, tl.full((1,), 1, tl.int1), c0,
@@ -180,7 +231,7 @@ def _conv1d_seq_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, seq
 
 
 @triton.jit
-def _conv1d_rows_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, row_start, row_slot, T,
+def _conv1d_rows_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, row_start, row_slot, T, XS,
                         QK: tl.constexpr, VC: tl.constexpr, BT: tl.constexpr, BLOCK_C: tl.constexpr,
                         DK: tl.constexpr):
     """Token-parallel conv: one program per (row block, channel block). Tap inputs before the row's sequence start
@@ -196,7 +247,7 @@ def _conv1d_rows_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, ro
     for k in tl.static_range(4):
         src = rows - 3 + k
         fx = src >= start
-        xv = tl.load(x_ptr + src.to(tl.int64)[:, None] * C + offs[None, :], mask=(rm & fx)[:, None],
+        xv = tl.load(x_ptr + src.to(tl.int64)[:, None] * XS + offs[None, :], mask=(rm & fx)[:, None],
                      other=0.0).to(tl.float32)
         xv = (xv * tl.load(xs_ptr + src, mask=rm & fx, other=0.0)[:, None]).to(tl.bfloat16).to(tl.float32)
         j = src - start + 3
@@ -208,16 +259,16 @@ def _conv1d_rows_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, ro
 
 
 @triton.jit
-def _conv_window_val(x_ptr, xs_ptr, st, t0, n, j, offs, C):
+def _conv_window_val(x_ptr, xs_ptr, st, t0, n, j, offs, C, XS):
     p = n - 3 + j
-    xv = (tl.load(x_ptr + (t0 + p) * C + offs, mask=p >= 0, other=0.0).to(tl.float32)
+    xv = (tl.load(x_ptr + (t0 + p) * XS + offs, mask=p >= 0, other=0.0).to(tl.float32)
           * tl.load(xs_ptr + t0 + p, mask=p >= 0, other=0.0)).to(tl.bfloat16)
     sv = tl.load(st + (n + j) * C + offs, mask=p < 0, other=0.0)
     return tl.where(p >= 0, xv, sv)
 
 
 @triton.jit
-def _conv1d_state_kernel(x_ptr, xs_ptr, state_ptr, seq_slot, seq_start, seq_len, C, BLOCK_C: tl.constexpr):
+def _conv1d_state_kernel(x_ptr, xs_ptr, state_ptr, seq_slot, seq_start, seq_len, C, XS, BLOCK_C: tl.constexpr):
     """New conv window of each sequence = its last 3 inputs (older ones from the old window if it fed < 3)."""
     s = tl.program_id(0)
     n = tl.load(seq_len + s)
@@ -226,9 +277,9 @@ def _conv1d_state_kernel(x_ptr, xs_ptr, state_ptr, seq_slot, seq_start, seq_len,
         t0 = tl.load(seq_start + s).to(tl.int64)
         offs = tl.program_id(1) * BLOCK_C + tl.arange(0, BLOCK_C)
         st = state_ptr + slot * 3 * C
-        v0 = _conv_window_val(x_ptr, xs_ptr, st, t0, n, 0, offs, C)
-        v1 = _conv_window_val(x_ptr, xs_ptr, st, t0, n, 1, offs, C)
-        v2 = _conv_window_val(x_ptr, xs_ptr, st, t0, n, 2, offs, C)
+        v0 = _conv_window_val(x_ptr, xs_ptr, st, t0, n, 0, offs, C, XS)
+        v1 = _conv_window_val(x_ptr, xs_ptr, st, t0, n, 1, offs, C, XS)
+        v2 = _conv_window_val(x_ptr, xs_ptr, st, t0, n, 2, offs, C, XS)
         tl.store(st + offs, v0)
         tl.store(st + C + offs, v1)
         tl.store(st + 2 * C + offs, v2)
@@ -244,36 +295,38 @@ def conv1d_varlen(x, xs, w, state, seq_slot, seq_start, seq_len, n_seqs, HK=16, 
     """x [T, C] (GEMM output, scaled by xs), w [C, 4] fp32, state [S, 3, C] bf16 (updated in place).
     Returns (q, k, v). Sequential per sequence: for decode steps."""
     T, C = x.shape
+    assert x.stride(1) == 1
     q, k, v = _conv_outs(T, x.device)
     BLOCK_C = 256
     _conv1d_seq_kernel[(n_seqs, C // BLOCK_C)](x, xs, w, state, q, k, v, seq_slot, seq_start, seq_len,
-                                               QK=HK * DK, VC=C - 2 * HK * DK, BLOCK_C=BLOCK_C, DK=DK, num_warps=2)
+                                               x.stride(0), QK=HK * DK, VC=C - 2 * HK * DK, BLOCK_C=BLOCK_C, DK=DK, num_warps=2)
     return q, k, v
 
 
 def conv1d_rows(x, xs, w, state, row_start, row_slot, seq_slot, seq_start, seq_len, n_seqs, HK=16, DK=128):
     """Token-parallel conv1d for steps with prefill chunks (any lengths); same result as conv1d_varlen."""
     T, C = x.shape
+    assert x.stride(1) == 1
     q, k, v = _conv_outs(T, x.device)
     BT, BLOCK_C = 16, 256
-    _conv1d_rows_kernel[(triton.cdiv(T, BT), C // BLOCK_C)](x, xs, w, state, q, k, v, row_start, row_slot, T,
+    _conv1d_rows_kernel[(triton.cdiv(T, BT), C // BLOCK_C)](x, xs, w, state, q, k, v, row_start, row_slot, T, x.stride(0),
                                                             QK=HK * DK, VC=C - 2 * HK * DK, BT=BT, BLOCK_C=BLOCK_C,
                                                             DK=DK, num_warps=4)
-    _conv1d_state_kernel[(n_seqs, triton.cdiv(C, 1024))](x, xs, state, seq_slot, seq_start, seq_len, C,
+    _conv1d_state_kernel[(n_seqs, triton.cdiv(C, 1024))](x, xs, state, seq_slot, seq_start, seq_len, C, x.stride(0),
                                                          BLOCK_C=1024, num_warps=4)
     return q, k, v
 
 
 # ---------------------------------------------------------------- Gated-DeltaNet: gates
 @triton.jit
-def _gdn_gates_kernel(a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_ptr, g_ptr, beta_ptr, HV: tl.constexpr,
+def _gdn_gates_kernel(a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_ptr, g_ptr, beta_ptr, AS, HV: tl.constexpr,
                       BH: tl.constexpr):
     r = tl.program_id(0).to(tl.int64)
     h = tl.arange(0, BH)
     m = h < HV
     xs = tl.load(xs_ptr + r)
-    a = (tl.load(a_ptr + r * HV + h, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-    b = (tl.load(b_ptr + r * HV + h, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+    a = (tl.load(a_ptr + r * AS + h, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+    b = (tl.load(b_ptr + r * AS + h, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
     x = a + tl.load(dtb_ptr + h, mask=m, other=0.0)
     sp = tl.where(x > 20.0, x, tl.log(1.0 + tl.exp(x)))
     tl.store(g_ptr + r * HV + h, -tl.exp(tl.load(alog_ptr + h, mask=m, other=0.0)) * sp, mask=m)
@@ -283,16 +336,17 @@ def _gdn_gates_kernel(a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_ptr, g_ptr, beta_ptr, 
 def gdn_gates(a, b, xs, A_log, dt_bias, HV=48):
     """g = -exp(A_log) * softplus(a + dt_bias), beta = sigmoid(b) (fp32 [T, HV]); a, b are GEMM outputs / xs."""
     T = a.shape[0]
+    assert a.stride(0) == b.stride(0) and a.stride(1) == b.stride(1) == 1
     g = torch.empty((T, HV), dtype=torch.float32, device=a.device)
     beta = torch.empty_like(g)
-    _gdn_gates_kernel[(T,)](a, b, xs, A_log, dt_bias, g, beta, HV=HV, BH=triton.next_power_of_2(HV), num_warps=1)
+    _gdn_gates_kernel[(T,)](a, b, xs, A_log, dt_bias, g, beta, a.stride(0), HV=HV, BH=triton.next_power_of_2(HV), num_warps=1)
     return g, beta
 
 
 # ---------------------------------------------------------------- Gated-DeltaNet: fused decode step
 @triton.jit
 def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_ptr, state_ptr, o_ptr, row_slot,
-                       row0_ptr, HV: tl.constexpr, HK: tl.constexpr, DK: tl.constexpr, DV: tl.constexpr,
+                       row0_ptr, AS, HV: tl.constexpr, HK: tl.constexpr, DK: tl.constexpr, DV: tl.constexpr,
                        BV: tl.constexpr, HPP: tl.constexpr, STAGES: tl.constexpr):
     """One program per (decode row, group of HPP value heads, V block): gates + one gated delta-rule step on the
     slot's [DK, DV] states (bf16 storage, fp32 math), written back in place; the head loop is software-pipelined
@@ -312,8 +366,8 @@ def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_
             q = tl.load(q_ptr + (r * HK + kh) * DK + dk).to(tl.float32) * (1.0 / tl.sqrt(DK * 1.0))
             k = tl.load(k_ptr + (r * HK + kh) * DK + dk).to(tl.float32)
             v = tl.load(v_ptr + (r * HV + hv) * DV + dv).to(tl.float32)
-            a = (tl.load(a_ptr + r * HV + hv).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-            b = (tl.load(b_ptr + r * HV + hv).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+            a = (tl.load(a_ptr + r * AS + hv).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+            b = (tl.load(b_ptr + r * AS + hv).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
             x = a + tl.load(dtb_ptr + hv)
             sp = tl.where(x > 20.0, x, tl.log(1.0 + tl.exp(x)))
             g = -tl.exp(tl.load(alog_ptr + hv)) * sp
@@ -342,8 +396,9 @@ def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows,
     """Rows row0 + [0, n_rows) with row_slot >= 0 are decode rows (row0: device int32 scalar).
     o [T, HV, DV] is written for those rows."""
     c = _gdn_decode_cfg(n_rows)
+    assert a.stride(0) == b.stride(0) and a.stride(1) == b.stride(1) == 1
     _gdn_decode_kernel[(n_rows, HV // c["HPP"], DV // c["BV"])](
-        q, k, v, a, b, xs, A_log, dt_bias, state, o, row_slot, row0, HV=HV, HK=HK, DK=DK, DV=DV, BV=c["BV"],
+        q, k, v, a, b, xs, A_log, dt_bias, state, o, row_slot, row0, a.stride(0), HV=HV, HK=HK, DK=DK, DV=DV, BV=c["BV"],
         HPP=c["HPP"], STAGES=c["STAGES"], num_warps=c["num_warps"])
     return o
 
@@ -437,7 +492,7 @@ def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, ch
 
 # ---------------------------------------------------------------- Gated RMSNorm (per head) * SiLU(z) + quant
 @triton.jit
-def _gated_norm_quant_kernel(o_ptr, z_ptr, xs_ptr, w_ptr, q_ptr, s_ptr, eps,
+def _gated_norm_quant_kernel(o_ptr, z_ptr, xs_ptr, w_ptr, q_ptr, s_ptr, eps, ZS,
                              H: tl.constexpr, D: tl.constexpr, BH: tl.constexpr):
     row = tl.program_id(0).to(tl.int64)
     h = tl.arange(0, BH)
@@ -445,7 +500,7 @@ def _gated_norm_quant_kernel(o_ptr, z_ptr, xs_ptr, w_ptr, q_ptr, s_ptr, eps,
     m = (h < H)[:, None]
     off = row * H * D + h[:, None] * D + d[None, :]
     o = tl.load(o_ptr + off, mask=m, other=0.0).to(tl.float32)
-    z = (tl.load(z_ptr + off, mask=m, other=0.0).to(tl.float32) * tl.load(xs_ptr + row)).to(tl.bfloat16).to(tl.float32)
+    z = (tl.load(z_ptr + row * ZS + h[:, None] * D + d[None, :], mask=m, other=0.0).to(tl.float32) * tl.load(xs_ptr + row)).to(tl.bfloat16).to(tl.float32)
     var = tl.sum(o * o, 1) / D
     w = tl.load(w_ptr + d)
     y = o * tl.rsqrt(var + eps)[:, None] * w[None, :] * (z * tl.sigmoid(z))
@@ -457,16 +512,17 @@ def _gated_norm_quant_kernel(o_ptr, z_ptr, xs_ptr, w_ptr, q_ptr, s_ptr, eps,
 
 def gated_norm_quant(o, z, xs, w, eps, H=48, D=128):
     T = o.shape[0]
+    assert z.stride(1) == 1
     q = torch.empty((T, H * D), dtype=FP8, device=o.device)
     s = torch.empty((T,), dtype=torch.float32, device=o.device)
-    _gated_norm_quant_kernel[(T,)](o, z, xs, w, q, s, eps, H=H, D=D, BH=triton.next_power_of_2(H), num_warps=8)
+    _gated_norm_quant_kernel[(T,)](o, z, xs, w, q, s, eps, z.stride(0), H=H, D=D, BH=triton.next_power_of_2(H), num_warps=8)
     return q, s
 
 
 # ---------------------------------------------------------------- attention: q/k norm + RoPE + KV write
 @triton.jit
 def _qkv_prep_kernel(qr_ptr, kr_ptr, vr_ptr, xs_ptr, pos_ptr, slot_map, qn_ptr, kn_ptr, q_out, k_cache, v_cache,
-                     eps, log2_theta,
+                     eps, log2_theta, QS, KS,
                      HQ: tl.constexpr, HKV: tl.constexpr, D: tl.constexpr, R: tl.constexpr):
     """One program per (token, head) over HQ query + HKV key + HKV value heads. q_raw rows are [HQ, 2D]
     (query | output gate per head). Query/key: RMSNorm(1 + w) over D, RoPE on the first R dims (rotate-half),
@@ -480,10 +536,10 @@ def _qkv_prep_kernel(qr_ptr, kr_ptr, vr_ptr, xs_ptr, pos_ptr, slot_map, qn_ptr, 
     slot = tl.load(slot_map + t).to(tl.int64)
     if h < HQ + HKV:
         if h < HQ:
-            src = qr_ptr + (t * HQ + h) * 2 * D
+            src = qr_ptr + t * QS + h * 2 * D
             nw = qn_ptr
         else:
-            src = kr_ptr + (t * HKV + (h - HQ)) * D
+            src = kr_ptr + t * KS + (h - HQ) * D
             nw = kn_ptr
         x = (tl.load(src + d).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
         rstd = tl.rsqrt(tl.sum(x * x, 0) / D + eps)
@@ -507,17 +563,18 @@ def _qkv_prep_kernel(qr_ptr, kr_ptr, vr_ptr, xs_ptr, pos_ptr, slot_map, qn_ptr, 
         tl.store(dst + R // 2 + half, y2.to(tl.bfloat16))
     else:
         hv = h - HQ - HKV
-        v = (tl.load(vr_ptr + (t * HKV + hv) * D + d).to(tl.float32) * xs).to(tl.bfloat16)
+        v = (tl.load(vr_ptr + t * KS + hv * D + d).to(tl.float32) * xs).to(tl.bfloat16)
         tl.store(v_cache + (slot * HKV + hv) * D + d, v)
 
 
 def qkv_prep(q_raw, k_raw, v_raw, xs, pos, slot_map, qn_w1, kn_w1, k_cache, v_cache, eps, theta,
              HQ=24, HKV=4, D=256, R=64):
     T = q_raw.shape[0]
+    assert k_raw.stride(0) == v_raw.stride(0) and q_raw.stride(1) == k_raw.stride(1) == v_raw.stride(1) == 1
     q = torch.empty((T, HQ, D), dtype=torch.bfloat16, device=q_raw.device)
     import math
     _qkv_prep_kernel[(T, HQ + 2 * HKV)](q_raw, k_raw, v_raw, xs, pos, slot_map, qn_w1, kn_w1, q, k_cache, v_cache,
-                                        eps, math.log2(theta), HQ=HQ, HKV=HKV, D=D, R=R, num_warps=2)
+                                        eps, math.log2(theta), q_raw.stride(0), k_raw.stride(0), HQ=HQ, HKV=HKV, D=D, R=R, num_warps=2)
     return q
 
 
@@ -688,14 +745,14 @@ def attn_prefill(q, k_cache, v_cache, block_table, tile_tok0, tile_ntok, tile_po
 
 # ---------------------------------------------------------------- attention output gate + quant
 @triton.jit
-def _attn_gate_quant_kernel(o_ptr, qr_ptr, xs_ptr, q_ptr, s_ptr, H: tl.constexpr, D: tl.constexpr,
+def _attn_gate_quant_kernel(o_ptr, qr_ptr, xs_ptr, q_ptr, s_ptr, QS, H: tl.constexpr, D: tl.constexpr,
                             BH: tl.constexpr):
     row = tl.program_id(0).to(tl.int64)
     h = tl.arange(0, BH)
     d = tl.arange(0, D)
     m = (h < H)[:, None]
     o = tl.load(o_ptr + row * H * D + h[:, None] * D + d[None, :], mask=m, other=0.0).to(tl.float32)
-    gate = tl.load(qr_ptr + row * H * 2 * D + h[:, None] * 2 * D + D + d[None, :], mask=m, other=0.0).to(tl.float32)
+    gate = tl.load(qr_ptr + row * QS + h[:, None] * 2 * D + D + d[None, :], mask=m, other=0.0).to(tl.float32)
     gate = (gate * tl.load(xs_ptr + row)).to(tl.bfloat16).to(tl.float32)
     y = (o * tl.sigmoid(gate)).to(tl.bfloat16).to(tl.float32)
     s = tl.maximum(tl.max(tl.max(tl.where(m, tl.abs(y), 0.0), 1), 0), 1e-12) / 448.0
@@ -708,5 +765,5 @@ def attn_gate_quant(o, q_raw, xs, H=24, D=256):
     T = o.shape[0]
     q = torch.empty((T, H * D), dtype=FP8, device=o.device)
     s = torch.empty((T,), dtype=torch.float32, device=o.device)
-    _attn_gate_quant_kernel[(T,)](o, q_raw, xs, q, s, H=H, D=D, BH=triton.next_power_of_2(H), num_warps=8)
+    _attn_gate_quant_kernel[(T,)](o, q_raw, xs, q, s, q_raw.stride(0), H=H, D=D, BH=triton.next_power_of_2(H), num_warps=8)
     return q, s

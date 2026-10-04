@@ -29,6 +29,9 @@ H, I = 5120, 17408
 HV, HK, DK, DV = 48, 16, 128, 128
 CONV_C = 2 * HK * DK + HV * DV  # 10240
 HQ, HKV, HD, ROT = 24, 4, 256, 64
+GROUPS = {"gate_up": ("mlp.", ["gate_proj", "up_proj"]),
+          "gdn_in": ("linear_attn.", ["in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a"]),
+          "attn_in": ("self_attn.", ["q_proj", "k_proj", "v_proj"])}
 
 
 def quantize_fp8(w: torch.Tensor):
@@ -101,6 +104,26 @@ class Model:
         for name, f in idx.items():
             if name.startswith(pre) or name == "lm_head.weight":
                 files.setdefault(f, []).append(name)
+        # linears sharing an input are stacked into one buffer per group, allocated up front (merging after the
+        # load would leave the freed per-linear weights as fragmentation)
+        shapes = {}
+        for f, names in files.items():
+            with safe_open(str(self.path / f), framework="pt", device="cpu") as fh:
+                for n in names:
+                    shapes[n.removeprefix(pre)] = fh.get_slice(n).get_shape()
+        self.group_buf, dest = {}, {}
+        for i, kind in enumerate(self.layer_types):
+            for gname, (sub, members) in GROUPS.items():
+                if gname != "gate_up" and (gname == "gdn_in") != (kind == "linear_attention"):
+                    continue
+                names = [f"layers.{i}.{sub}{m}.weight" for m in members]
+                rows = [shapes[n][0] for n in names]
+                buf = torch.empty((sum(rows), shapes[names[0]][1]), dtype=K.FP8, device=self.dev)
+                self.group_buf[(i, gname)] = buf
+                o = 0
+                for n, r in zip(names, rows):
+                    dest[n] = buf[o:o + r]
+                    o += r
         raw = {}  # quantized as they are read: the bf16 checkpoint (54 GB) never sits on the GPU at once
         for f, names in files.items():
             with safe_open(str(self.path / f), framework="pt", device=self.dev) as fh:
@@ -109,7 +132,11 @@ class Model:
                     short = n.removeprefix(pre)
                     if t.ndim == 2 and short.startswith("layers.") and "conv1d" not in short:
                         t = quantize_fp8(t)
+                        if short in dest:
+                            dest[short].copy_(t[0])
+                            t = (dest[short], t[1])
                     raw[short] = t
+                    del t
             torch.cuda.empty_cache()
         self.embed = raw.pop("embed_tokens.weight")
         self.lm_head = raw.pop("lm_head.weight")
@@ -135,6 +162,11 @@ class Model:
                 L["kn_w1"] = (1.0 + g("self_attn.k_norm.weight").float()).contiguous()
             for n in names:
                 L[n.split(".")[1]] = g(n + ".weight")
+            for gname, (_, members) in GROUPS.items():
+                if (i, gname) in self.group_buf:
+                    parts = [L.pop(n) for n in members]
+                    svec = torch.cat([sc.expand(q.shape[0]) for q, sc in parts]).contiguous()
+                    L[gname] = (self.group_buf[(i, gname)], svec, parts)
             self.layers.append(L)
         assert not raw, f"unused weights: {list(raw)[:5]}"
         self.one = torch.ones((), dtype=torch.float32, device=self.dev)
@@ -142,6 +174,21 @@ class Model:
     def mm(self, xq, w):
         q, s = w
         return torch._scaled_mm(xq, q.t(), self.one, s, out_dtype=torch.bfloat16)
+
+    def mm_group(self, xq, G):
+        """G = (stacked fp8 weight, per-column scale vector, per-linear (weight view, scale)): linears sharing an
+        input, weights and per-tensor scales unchanged. Outputs: column slices of one small-M GEMM, or per-linear
+        cuBLAS calls."""
+        w, svec, parts = G
+        cfg = K.mm_fp8_cfg(xq.shape[0], w.shape[0])
+        if cfg is None:
+            return [self.mm(xq, p) for p in parts]
+        y = K.mm_fp8(xq, w, svec, cfg)
+        out, o = [], 0
+        for q, _ in parts:
+            out.append(y[:, o:o + q.shape[0]])
+            o += q.shape[0]
+        return out
 
     # ------------------------------------------------------------------ forward
     def forward(self, b: Step) -> torch.Tensor:
@@ -163,7 +210,7 @@ class Model:
                 delta, dscale = self._attn(L, ai, xq, xs, b)
                 ai += 1
             xq, xs = K.add_rmsnorm_quant(res, L["post_w1"], self.eps, delta, dscale)
-            hq, hs = K.silu_mul_quant(self.mm(xq, L["gate_proj"]), self.mm(xq, L["up_proj"]), xs)
+            hq, hs = K.silu_mul_quant(*self.mm_group(xq, L["gate_up"]), xs)
             delta, dscale = self.mm(hq, L["down_proj"]), hs
         h = K.add_rmsnorm_quant(res, self.final_w1, self.eps, delta, dscale, quant=False)
         logits = h[b.logit_row] @ self.lm_head.t()
@@ -172,10 +219,7 @@ class Model:
         return nxt
 
     def _gdn(self, L, li, xq, xs, b: Step, pre):
-        qkv_raw = self.mm(xq, L["in_proj_qkv"])
-        z_raw = self.mm(xq, L["in_proj_z"])
-        b_raw = self.mm(xq, L["in_proj_b"])
-        a_raw = self.mm(xq, L["in_proj_a"])
+        qkv_raw, z_raw, b_raw, a_raw = self.mm_group(xq, L["gdn_in"])
         ns = b.seq_slot.shape[0]
         if b.npre:
             q, k, v = K.conv1d_rows(qkv_raw, xs, L["conv_w"], self.conv[li], b.row_start, b.row_seq_slot,
@@ -193,9 +237,7 @@ class Model:
         return self.mm(oq, L["out_proj"]), os_
 
     def _attn(self, L, ai, xq, xs, b: Step):
-        q_raw = self.mm(xq, L["q_proj"])
-        k_raw = self.mm(xq, L["k_proj"])
-        v_raw = self.mm(xq, L["v_proj"])
+        q_raw, k_raw, v_raw = self.mm_group(xq, L["attn_in"])
         q = K.qkv_prep(q_raw, k_raw, v_raw, xs, b.pos, b.slot_map, L["qn_w1"], L["kn_w1"], self.kc[ai],
                        self.vc[ai], self.eps, self.theta)
         o = torch.empty((b.T, HQ, HD), dtype=torch.bfloat16, device=self.dev)
