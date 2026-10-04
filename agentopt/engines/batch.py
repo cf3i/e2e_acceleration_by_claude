@@ -45,12 +45,16 @@ from .slot_cache import SlotCache
 class BatchEngine(NaiveEngine):
     def __init__(self, num_slots: int = 32, max_len: int = 2048, compile_decode: bool = True,
                  gqa_decode_attn: bool = True, prefix_reuse: bool = False, force_max: int = 0,
-                 inplace_state: bool = False, **kw):
+                 inplace_state: bool = False, fp8: bool = False, **kw):
         super().__init__(**kw)
         self.options.update(num_slots=num_slots, max_len=max_len, compile_decode=compile_decode,
                             gqa_decode_attn=gqa_decode_attn, prefix_reuse=prefix_reuse, force_max=force_max,
-                            inplace_state=inplace_state)
+                            inplace_state=inplace_state, fp8=fp8)
         assert prefix_reuse or not force_max, "forced-token prefill only feeds suffixes of reusable state"
+        if fp8:
+            from .quant import fp8_quantize
+            fp8_quantize(self.model)
+            print(f"fp8: weights now {torch.cuda.memory_allocated() / 1e9:.1f} GB on device", flush=True)
         if gqa_decode_attn:
             from .decode_attention import install
             install(self.model)

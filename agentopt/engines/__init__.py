@@ -24,6 +24,8 @@ PRESETS.update({
                          "prefix_reuse": True, "force_max": 128}),
     "p2_s05": ("batch", {**_P1, "num_slots": 32,                  # + decode writes recurrent states in place
                          "prefix_reuse": True, "force_max": 128, "inplace_state": True}),
+    "p2_s06": ("batch", {**_P1, "num_slots": 32,                  # + FP8 (torchao dynamic per-row) linears
+                         "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": True}),
 })
 
 
