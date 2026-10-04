@@ -25,7 +25,9 @@ PRESETS.update({
     "p2_s05": ("batch", {**_P1, "num_slots": 32,                  # + decode writes recurrent states in place
                          "prefix_reuse": True, "force_max": 128, "inplace_state": True}),
     "p2_s06": ("batch", {**_P1, "num_slots": 32,                  # + FP8 (torchao dynamic per-row) linears
-                         "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": True}),
+                         "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": "row"}),
+    "p2_s06t": ("batch", {**_P1, "num_slots": 32,                 # FP8 with per-tensor scales (cuBLASLt)
+                          "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": "tensor"}),
 })
 
 

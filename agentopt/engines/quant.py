@@ -7,14 +7,17 @@ decides greedy ties; it is 2% of the weights).
 import torch
 
 
-def fp8_quantize(model):
-    from torchao.quantization import Float8DynamicActivationFloat8WeightConfig, PerRow, quantize_
+def fp8_quantize(model, granularity: str = "row"):
+    """granularity: "row" (per-token act x per-channel weight scales; CUTLASS rowwise kernel) or "tensor"
+    (one scale each; plain cuBLASLt FP8 GEMM)."""
+    from torchao.quantization import Float8DynamicActivationFloat8WeightConfig, PerRow, PerTensor, quantize_
 
     def keep(mod, fqn):
         return (isinstance(mod, torch.nn.Linear) and not fqn.endswith("lm_head")
                 and mod.in_features % 16 == 0 and mod.out_features % 16 == 0)
 
     n_before = sum(p.numel() * p.element_size() for p in model.parameters())
-    quantize_(model, Float8DynamicActivationFloat8WeightConfig(granularity=PerRow()), filter_fn=keep)
+    quantize_(model, Float8DynamicActivationFloat8WeightConfig(
+        granularity={"row": PerRow, "tensor": PerTensor}[granularity]()), filter_fn=keep)
     torch.cuda.empty_cache()
     return n_before
