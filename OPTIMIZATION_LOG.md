@@ -20,6 +20,10 @@ Each entry: profile evidence → Amdahl estimate → change → measured result 
 | p2_s05_inplace_state | p2 | + fla decode kernel writes recurrent state in place | 26.7 ms/step | **35.7** | 46.9 | 0.9375 | −3.2 ms/step state copy; GEMM 78% of step |
 | p2_s06_fp8 | p2 | + FP8 linears (torchao, per-row scales) | 23.05 ms/step | 32.2 | 52.0 | 0.9375 | CUTLASS rowwise GEMM slow at M=32 |
 | p2_s06t_fp8_tensor | p2 | FP8 with per-tensor scales (cuBLASLt) | **20.86 ms/step** | **28.6** | **58.5** | 0.9375 | GEMM 20.7 → 12.9 ms; kept |
+| p2_s07_bucket_graphs | p2 | + 64 slots, one graph per batch bucket, live rows compacted | 26.9 ms/step @64, 16.2 @8 | **24.8** | 67.4 | 0.9375 | 990 steps ≈ longest chain → critical-path bound |
+| p2_s08_bf16_state | p2 | + recurrent states stored in bf16 | 26.1 ms/step @64 | 23.6 | 71.0 | 0.9375 | recurrent kernel only −8% (launch-bound) |
+| p2_s09_recurrent_launch | p2 | + tuned (BV, warps) launch of fla decode kernel | 23.1 ms/step @64, 15.7 @8 | **21.5** | 77.7 | 0.9297 | recurrent 7.7 → 4.1 ms @64; 1 borderline task flips |
+| p2_s10_force_all | p2 | + all suffixes forced (force_max 512) | same | **21.3** | **78.5** | 0.9375 | eager prefill 1.9 → 0.6 s; chain +68 steps (noise) |
 
 ## stage00_baseline
 - Profile: GPU busy 0.21; `_cudnn_attention_forward` 31% of CPU time (2.4 ms CPU / 13 µs GPU per call);
@@ -120,3 +124,26 @@ attention rewrite (1.19×), cuDNN-SDPA off (cold cliff), fla kernels (prefill 3.
   scale granularity picks the kernel (CUTLASS rowwise vs cuBLASLt), plus dynamic activation-quant kernels.
 - Next: makespan is now set as much by step *count* as step time — 16.9 live rows per step in a 32-row graph
   (tail) and a ~1000-step longest chain → per-bucket graphs + compaction + 64 slots (sim ~22 s).
+
+## p2_s07_bucket_graphs — tail and queueing
+- Evidence: 16.9 live rows per step in a 32-row graph; the longest agent (~990 token-steps) can start late.
+- Change: graphs for B ∈ {8,16,24,32,48,64} over [:B] views; logical slot → physical row map keeps live rows
+  in [0, #live) via row swaps; S = 64. dynamo bug on the way (property reading cache.B not guarded).
+- Result: **24.8 s**, 990 steps (chain 989), computed/live rows 1.89 → 1.12. check_batch with one bucket +
+  per-row FP8: 20/20 identical; default 8/20 (bucket-dependent GEMMs + per-tensor FP8 couples rows).
+- Lesson: per-tensor activation scales trade batch invariance for speed.
+
+## p2_s08 / p2_s09 — recurrent state bytes, then the launch that can use them
+- bf16 storage halved the bytes but the kernel went from bandwidth-bound to launch-bound (BV=8, 1 warp):
+  −8% only (23.6 s). Sweep of (BV, warps, stages) in a micro → bf16 B=64 148 → 91 us/layer; **21.5 s**.
+- Ablation: tuned launch on fp32 22.5 s. Each half alone gives part; together 3.3 s.
+
+## p2_s10_force_all — last eager prefills
+- 4 suffixes > 128 tokens → eager FP8 prefill 0.33 s each, stalling all rows. force_max 512 → **21.3 s**;
+  same-turn simulation 21.5 → 20.2 s. Run-to-run chain variation (±70 steps) is now as big as one change.
+
+## Phase 2 summary
+474.8 s (p1_s07) → 21.3 s (22×), 1673.6 → 21.3 s overall (78.5×), accuracy 0.93–0.94 throughout.
+Order of impact: continuous batching (7.8×), forced-token prefill (1.30×), FP8 (1.25×), async tools (1.21×),
+bucket graphs + 64 slots (1.15×), state launch/bf16 (1.15×), in-place state (1.08×). Prefix reuse alone gave
+0× (it enabled forced prefill). The run is now bound by its longest agent: ~1000 steps × 15–23 ms.

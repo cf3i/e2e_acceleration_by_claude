@@ -1,0 +1,57 @@
+Time (%),Total Time (ns),Instances,Avg (ns),Med (ns),Min (ns),Max (ns),StdDev (ns),Name
+27.8,142232422,960,148158.8,148128.0,147328,149504,286.7,fused_recurrent_gated_delta_rule_fwd_kernel
+18.2,92937347,2560,36303.7,35168.0,32960,40672,2289.2,nvjet_qqtst_144x64_128x8_2x1_v_bz_TNN
+12.5,63888861,2560,24956.6,25456.0,13568,35648,8852.4,nvjet_qqtst_64x64_128x13_4x1_v_bz_TNT
+5.8,29807778,320,93149.3,93088.0,92000,95008,429.7,nvjet_tst_256x8_64x6_2x1_v_bz_TNT
+5.6,28612003,320,89412.5,89344.0,87392,92192,749.5,nvjet_tst_128x8_64x12_2x1_v_bz_NNT
+4.0,20410335,960,21260.8,21152.0,20768,22720,335.8,nvjet_qqtst_80x64_128x11_2x1_v_bz_TNN
+3.4,17510496,20,875524.8,875936.0,872544,879776,1822.3,nvjet_tst_384x64_64x3_2x1_v_bz_coopB_TNN
+2.6,13507074,960,14069.9,14016.0,13376,16000,348.3,nvjet_qqtst_72x64_128x12_4x1_v_bz_TNN
+2.4,12158016,1920,6332.3,6336.0,5984,6976,113.7,nvjet_qqtst_8x64_128x16_4x1_v_bz_TNN
+1.9,9918336,960,10331.6,10304.0,9888,11328,157.6,"void causal_conv1d_update_kernel<Causal_conv1d_update_kernel_traits<(int)64, (int)4, c10::BFloat16, c10::BFloat16>, (bool)0>(ConvParamsBase)"
+1.5,7762720,320,24258.5,24096.0,23776,25280,386.5,nvjet_qqtst_96x64_128x10_2x1_v_bz_TNN
+1.5,7515201,4800,1565.7,1568.0,1408,2336,88.1,triton_per_fused__scaled_mm__to_copy_abs_amax_clamp_div_t_view_1
+1.0,5228512,3520,1485.4,1472.0,1376,1568,36.5,triton_per_fused__scaled_mm__to_copy_abs_add_amax_clamp_div_mean_mul_pow_rsqrt_t_view_1
+0.8,4318880,640,6748.3,6752.0,6496,7552,116.0,nvjet_qqtst_24x64_128x16_4x1_v_bz_TNN
+0.8,4093312,1920,2131.9,2208.0,1760,3104,270.6,triton_poi_fused__scaled_mm__to_copy_clamp_div_t_view_2
+0.8,3861313,1280,3016.7,3136.0,2368,3808,300.7,triton_red_fused__to_copy_abs_add_amax_mean_mul_pow_rsqrt_0
+0.7,3795968,960,3954.1,3936.0,3776,4768,90.7,triton_red_fused_abs_amax_mul_silu_view_3
+0.7,3465216,320,10828.8,10800.0,10080,12032,437.6,triton_red_fused__softmax__to_copy_bitwise_not_exp_masked_fill_mul_prepare_softmax_online_sub_view_10
+0.6,3113920,960,3243.7,3232.0,3072,3744,76.1,triton_poi_fused__scaled_mm__to_copy_clamp_div_mul_silu_t_view_5
+0.6,3111297,1280,2430.7,2464.0,2208,3072,97.9,triton_poi_fused__scaled_mm__to_copy_add_clamp_div_mean_mul_pow_rsqrt_t_view_2
+0.5,2712480,960,2825.5,2816.0,2688,3584,88.4,layer_norm_gated_fwd_kernel
+0.5,2653344,960,2763.9,2752.0,2624,2912,44.1,"void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[lambda() (instance 3)]::operator ()() const::[lambda() (instance 12)]::operator ()() const::[lambda(c10::BFloat16) (instance 1)]>(at::TensorIteratorBase &, const T1 &)::[lambda(int) (instance 1)]>(int, T3)"
+0.5,2531552,980,2583.2,2560.0,2368,3296,107.6,triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0
+0.4,2086304,960,2173.2,2176.0,2080,2272,38.3,triton_red_fused_abs_amax_view_0
+0.4,1974432,960,2056.7,2048.0,1920,2592,51.9,triton_poi_fused_add_view_6
+0.4,1955584,960,2037.1,2016.0,1888,6752,171.3,triton_red_fused_abs_amax_0
+0.3,1537632,960,1601.7,1568.0,1472,2432,88.9,triton_per_fused__scaled_mm__to_copy_abs_amax_clamp_div_mul_silu_t_view_4
+0.3,1518880,960,1582.2,1568.0,1472,2016,76.6,triton_poi_fused__to_copy_add_exp_mul_neg_softplus_view_4
+0.3,1464096,960,1525.1,1504.0,1440,1792,53.4,triton_poi_fused_clone_expand_split_with_sizes_transpose_unsqueeze_view_6
+0.3,1445313,960,1505.5,1504.0,1408,1760,64.6,triton_poi_fused_clone_expand_split_with_sizes_transpose_unsqueeze_view_5
+0.3,1372960,320,4290.5,4288.0,3840,4736,193.6,triton_red_fused_abs_amax_mul_silu_view_16
+0.3,1335008,960,1390.6,1376.0,1280,1568,49.9,triton_poi_fused_sigmoid_view_3
+0.2,1080928,320,3377.9,3328.0,3200,4512,225.3,triton_red_fused__unsafe_view_abs_amax_clone_mul_sigmoid_split_transpose_view_11
+0.2,1072992,320,3353.1,3360.0,3200,3808,73.9,triton_poi_fused__scaled_mm__to_copy_clamp_div_mul_silu_t_view_18
+0.2,1057664,320,3305.2,3296.0,3104,4352,118.8,triton_red_fused__to_copy_abs_add_amax_mean_mul_pow_rsqrt_view_14
+0.1,718817,320,2246.3,2240.0,2144,3072,89.7,triton_poi_fused__scaled_mm__to_copy__unsafe_view_clamp_clone_div_mul_sigmoid_split_t_transpose_view_13
+0.1,704320,320,2201.0,2192.0,2112,2784,68.0,triton_poi_fused__scaled_mm__to_copy_add_clamp_div_mean_mul_pow_rsqrt_t_view_15
+0.1,664864,320,2077.7,2080.0,1920,2688,94.8,triton_poi_fused__to_copy_add_cat_mean_mul_neg_pow_rsqrt_slice_split_transpose_unsqueeze_view_4
+0.1,630464,320,1970.2,1952.0,1888,2560,57.0,triton_poi_fused_add_view_19
+0.1,593280,20,29664.0,29504.0,28416,32800,1053.8,"void at::native::reduce_kernel<(int)512, (int)1, at::native::ReduceOp<c10::BFloat16, at::native::ArgMaxOps<float>, unsigned int, long, (int)4, (int)4>>(T3)"
+0.1,549024,320,1715.7,1664.0,1568,1984,110.9,triton_per_fused__to_copy_mean_pow_split_view_3
+0.1,548288,320,1713.4,1696.0,1632,1984,57.7,triton_poi_fused__to_copy_add_cat_mean_mul_neg_pow_rsqrt_slice_transpose_unsqueeze_view_7
+0.1,538720,320,1683.5,1664.0,1600,1984,64.5,triton_poi_fused__to_copy_add_cat_mean_mul_pow_rsqrt_slice_transpose_unsqueeze_view_8
+0.1,538368,320,1682.4,1664.0,1568,2368,87.2,triton_poi_fused__to_copy_add_cat_mean_mul_pow_rsqrt_slice_split_transpose_unsqueeze_view_5
+0.1,534080,320,1669.0,1632.0,1536,2176,90.6,triton_poi_fused_index_put_select_transpose_view_9
+0.1,498688,320,1558.4,1536.0,1440,1728,66.3,triton_per_fused__to_copy_mean_pow_view_6
+0.1,491680,320,1536.5,1536.0,1472,1600,34.5,triton_per_fused__scaled_mm__to_copy_abs_amax_clamp_div_mul_silu_t_view_17
+0.1,475584,320,1486.2,1472.0,1408,1568,33.3,triton_per_fused__scaled_mm__to_copy__unsafe_view_abs_amax_clamp_clone_div_mul_sigmoid_split_t_transpose_view_12
+0.0,56320,20,2816.0,2784.0,2752,2944,63.2,"void at::native::index_elementwise_kernel<(int)128, (int)4, void at::native::gpu_index_kernel<void at::native::index_put_kernel_impl<at::native::OpaqueType<(int)1>>(at::TensorIterator &, c10::ArrayRef<long>, c10::ArrayRef<long>)::[lambda(char *, const char *, long) (instance 1)]>(at::TensorIteratorBase &, c10::ArrayRef<long>, c10::ArrayRef<long>, const T1 &, bool)::[lambda(int) (instance 1)]>(long, T3)"
+0.0,50496,20,2524.8,2512.0,2400,2720,84.9,"void at::native::vectorized_gather_kernel<(int)16, long>(char *, char *, T2 *, int, long, long, long, long, bool)"
+0.0,38656,20,1932.8,1904.0,1856,2112,77.3,"void at::native::vectorized_elementwise_kernel<(int)2, at::native::<unnamed>::where_kernel_impl(at::TensorIterator &)::[lambda() (instance 1)]::operator ()() const::[lambda() (instance 8)]::operator ()() const::[lambda(bool, long, long) (instance 1)], std::array<char *, (unsigned long)4>>(int, T2, T3)"
+0.0,34464,20,1723.2,1712.0,1600,1952,116.7,"void at::native::vectorized_elementwise_kernel<(int)4, void at::native::compare_scalar_kernel<long>(at::TensorIteratorBase &, at::native::<unnamed>::OpType, T1)::[lambda(long) (instance 1)], std::array<char *, (unsigned long)2>>(int, T2, T3)"
+0.0,33056,20,1652.8,1632.0,1600,1824,51.2,"void at::native::vectorized_elementwise_kernel<(int)2, at::native::CUDAFunctorOnSelf_add<long>, std::array<char *, (unsigned long)2>>(int, T2, T3)"
+0.0,31904,20,1595.2,1600.0,1472,1792,79.9,triton_poi_fused__to_copy_bmm_expand_select_slice_transpose_unsqueeze_view_0
+0.0,30784,20,1539.2,1536.0,1504,1600,23.0,triton_poi_fused__to_copy_bmm_cat_cos_expand_mul_select_sin_slice_transpose_unsqueeze_view_1
+0.0,29184,20,1459.2,1472.0,1440,1472,16.1,"void at::native::vectorized_elementwise_kernel<(int)2, at::native::<unnamed>::launch_clamp_scalar(at::TensorIteratorBase &, c10::Scalar, c10::Scalar, at::native::detail::ClampLimits)::[lambda() (instance 1)]::operator ()() const::[lambda() (instance 4)]::operator ()() const::[lambda(long) (instance 1)], std::array<char *, (unsigned long)2>>(int, T2, T3)"

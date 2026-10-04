@@ -1,0 +1,69 @@
+
+## NVTX ranges (L1 sections): (no data)
+
+## GPU kernels: total 0.51s over 43420 instances
+ time%   total_s     count    avg_us  name
+  27.8     0.142       960     148.2  fused_recurrent_gated_delta_rule_fwd_kernel
+  18.2     0.093      2560      36.3  nvjet_qqtst_144x64_128x8_2x1_v_bz_TNN
+  12.5     0.064      2560      25.0  nvjet_qqtst_64x64_128x13_4x1_v_bz_TNT
+   5.8     0.030       320      93.1  nvjet_tst_256x8_64x6_2x1_v_bz_TNT
+   5.6     0.029       320      89.4  nvjet_tst_128x8_64x12_2x1_v_bz_NNT
+   4.0     0.020       960      21.3  nvjet_qqtst_80x64_128x11_2x1_v_bz_TNN
+   3.4     0.018        20     875.5  nvjet_tst_384x64_64x3_2x1_v_bz_coopB_TNN
+   2.6     0.014       960      14.1  nvjet_qqtst_72x64_128x12_4x1_v_bz_TNN
+   2.4     0.012      1920       6.3  nvjet_qqtst_8x64_128x16_4x1_v_bz_TNN
+   1.9     0.010       960      10.3  void causal_conv1d_update_kernel<Causal_conv1d_update_kernel_traits<(int)64, (int)4, c10::BFloat16, c10::BFloa
+   1.5     0.008       320      24.3  nvjet_qqtst_96x64_128x10_2x1_v_bz_TNN
+   1.5     0.008      4800       1.6  triton_per_fused__scaled_mm__to_copy_abs_amax_clamp_div_t_view_1
+   1.0     0.005      3520       1.5  triton_per_fused__scaled_mm__to_copy_abs_add_amax_clamp_div_mean_mul_pow_rsqrt_t_view_1
+   0.8     0.004       640       6.7  nvjet_qqtst_24x64_128x16_4x1_v_bz_TNN
+   0.8     0.004      1920       2.1  triton_poi_fused__scaled_mm__to_copy_clamp_div_t_view_2
+   0.8     0.004      1280       3.0  triton_red_fused__to_copy_abs_add_amax_mean_mul_pow_rsqrt_0
+   0.7     0.004       960       4.0  triton_red_fused_abs_amax_mul_silu_view_3
+   0.7     0.003       320      10.8  triton_red_fused__softmax__to_copy_bitwise_not_exp_masked_fill_mul_prepare_softmax_online_sub_view_10
+   0.6     0.003       960       3.2  triton_poi_fused__scaled_mm__to_copy_clamp_div_mul_silu_t_view_5
+   0.6     0.003      1280       2.4  triton_poi_fused__scaled_mm__to_copy_add_clamp_div_mean_mul_pow_rsqrt_t_view_2
+   0.5     0.003       960       2.8  layer_norm_gated_fwd_kernel
+   0.5     0.003       960       2.8  void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::dire
+   0.5     0.003       980       2.6  triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0
+   0.4     0.002       960       2.2  triton_red_fused_abs_amax_view_0
+   0.4     0.002       960       2.1  triton_poi_fused_add_view_6
+
+## CUDA API (host side): total 0.54s over 142 instances
+ time%   total_s     count    avg_us  name
+  85.4     0.460        20   22977.6  cudaEventSynchronize
+  14.5     0.078        20    3892.0  cudaGraphLaunch_v10000
+   0.1     0.000        20      15.7  cudaMemcpyAsync
+   0.0     0.000        20       5.2  cudaEventRecordWithFlags_v11010
+   0.0     0.000        60       1.2  cudaStreamIsCapturing_v10000
+   0.0     0.000         1      42.7  cudaDeviceSynchronize
+   0.0     0.000         1       5.5  cuProfilerStart
+
+## GPU memcpy/memset: total 0.00s over 740 instances
+ time%   total_s     count    avg_us  name
+  85.3     0.001       680       0.8  [CUDA memset]
+   7.6     0.000        40       1.2  [CUDA memcpy Device-to-Device]
+   7.1     0.000        20       2.3  [CUDA memcpy Device-to-Host]
+
+## CUDA-graph kernels: 20 replays, 2171 kernels/replay, 25.54 ms GPU time/replay
+  GEMM                            56.9%   14.55 ms/replay     529 kernels/replay  avg   27.5 us
+  fla/conv1d                      30.3%    7.74 ms/replay     144 kernels/replay  avg   53.8 us
+  triton (inductor)               12.1%    3.08 ms/replay    1443 kernels/replay  avg    2.1 us
+  torch elementwise/copy/other     0.6%    0.14 ms/replay      54 kernels/replay  avg    2.7 us
+  torch reduce                     0.1%    0.03 ms/replay       1 kernels/replay  avg   29.7 us
+ time%  us/replay  n/replay   avg_us  name
+  27.8     7111.6        48    148.2  fused_recurrent_gated_delta_rule_fwd_kernel
+  18.2     4646.9       128     36.3  nvjet_qqtst_144x64_128x8_2x1_v_bz_TNN
+  12.5     3194.4       128     25.0  nvjet_qqtst_64x64_128x13_4x1_v_bz_TNT
+   5.8     1490.4        16     93.1  nvjet_tst_256x8_64x6_2x1_v_bz_TNT
+   5.6     1430.6        16     89.4  nvjet_tst_128x8_64x12_2x1_v_bz_NNT
+   4.0     1020.5        48     21.3  nvjet_qqtst_80x64_128x11_2x1_v_bz_TNN
+   3.4      875.5         1    875.5  nvjet_tst_384x64_64x3_2x1_v_bz_coopB_TNN
+   2.6      675.4        48     14.1  nvjet_qqtst_72x64_128x12_4x1_v_bz_TNN
+   2.4      607.9        96      6.3  nvjet_qqtst_8x64_128x16_4x1_v_bz_TNN
+   1.9      495.9        48     10.3  causal_conv1d_update_kernel
+   1.5      388.1        16     24.3  nvjet_qqtst_96x64_128x10_2x1_v_bz_TNN
+   1.5      375.8       240      1.6  triton_per_fused__scaled_mm__to_copy_abs_amax_clamp_div_t_view_1
+   1.0      261.4       176      1.5  triton_per_fused__scaled_mm__to_copy_abs_add_amax_clamp_div_mean_mul_pow_rsqrt_t_view_1
+   0.8      215.9        32      6.7  nvjet_qqtst_24x64_128x16_4x1_v_bz_TNN
+   0.8      204.7        96      2.1  triton_poi_fused__scaled_mm__to_copy_clamp_div_t_view_2

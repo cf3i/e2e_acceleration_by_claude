@@ -1,0 +1,32 @@
+Failed to load /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_cutlass_90a.abi3.so: Could not load this library: /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_cutlass_90a.abi3.so
+Failed to load /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_mxfp8.cpython-310-x86_64-linux-gnu.so: Could not load this library: /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_mxfp8.cpython-310-x86_64-linux-gnu.so
+Loading weights:   0%|          | 0/851 [00:00<?, ?it/s]Loading weights:   6%|▌         | 47/851 [00:00<00:01, 433.49it/s]Loading weights:  11%|█         | 91/851 [00:00<00:03, 245.46it/s]Loading weights:  14%|█▍        | 120/851 [00:00<00:03, 208.15it/s]Loading weights:  17%|█▋        | 145/851 [00:00<00:03, 211.64it/s]Loading weights:  20%|█▉        | 168/851 [00:00<00:03, 180.60it/s]Loading weights:  25%|██▍       | 210/851 [00:00<00:02, 234.02it/s]Loading weights:  28%|██▊       | 236/851 [00:01<00:02, 228.76it/s]Loading weights:  31%|███       | 261/851 [00:01<00:02, 227.54it/s]Loading weights:  33%|███▎      | 285/851 [00:01<00:02, 190.09it/s]Loading weights:  36%|███▌      | 306/851 [00:01<00:03, 181.63it/s]Loading weights:  38%|███▊      | 326/851 [00:01<00:03, 168.66it/s]Loading weights:  40%|████      | 344/851 [00:01<00:03, 147.68it/s]Loading weights:  45%|████▌     | 383/851 [00:01<00:02, 190.75it/s]Loading weights:  47%|████▋     | 404/851 [00:02<00:02, 166.83it/s]Loading weights:  50%|████▉     | 424/851 [00:02<00:02, 173.89it/s]Loading weights:  53%|█████▎    | 450/851 [00:02<00:02, 191.72it/s]Loading weights:  55%|█████▌    | 471/851 [00:02<00:02, 170.71it/s]Loading weights:  58%|█████▊    | 490/851 [00:02<00:02, 163.87it/s]Loading weights:  61%|██████▏   | 523/851 [00:02<00:01, 201.56it/s]Loading weights:  64%|██████▍   | 545/851 [00:02<00:01, 183.57it/s]Loading weights:  67%|██████▋   | 568/851 [00:02<00:01, 194.35it/s]Loading weights:  71%|███████   | 606/851 [00:03<00:01, 233.18it/s]Loading weights:  74%|███████▍  | 631/851 [00:03<00:01, 211.67it/s]Loading weights:  77%|███████▋  | 654/851 [00:03<00:01, 195.01it/s]Loading weights:  80%|███████▉  | 677/851 [00:03<00:00, 203.11it/s]Loading weights:  82%|████████▏ | 699/851 [00:03<00:00, 182.64it/s]Loading weights:  86%|████████▌ | 733/851 [00:03<00:00, 218.53it/s]Loading weights:  89%|████████▉ | 760/851 [00:03<00:00, 214.56it/s]Loading weights:  92%|█████████▏| 783/851 [00:03<00:00, 196.10it/s]Loading weights:  94%|█████████▍| 804/851 [00:04<00:00, 183.49it/s]Loading weights:  98%|█████████▊| 836/851 [00:04<00:00, 198.83it/s]Loading weights: 100%|██████████| 851/851 [00:04<00:00, 199.32it/s]
+fp8: weights now 29.4 GB on device
+batch decode graphs (S=64, buckets [8, 16, 24, 32, 48, 64]) captured in 466.8s, cache 17.2 GiB
+extend vs full prefill: 11/20 identical; divergences [27, None, None, None, None, None, None, 42, 63, 38, 111, None, 15, 84, None, None, None, 15, None, 83]  (shared prefix 352 tokens)
+shared vs full prefill: 11/20 identical; divergences [27, 42, None, None, 14, None, None, None, None, 38, 83, None, 15, 84, None, None, None, 15, None, 14]  (shared prefix 352 tokens)
+p2_s07: 8/20 identical alone vs concurrent; alone 60.0s, concurrent 6.4s (371 steps); divergences [79, None, None, 15, 14, None, 16, None, 23, 38, 83, None, 15, 84, None, None, None, 158, 16, 83]
+  alone: ' = end_hour - start_hour\ntotal_melted = melting_rate * duration\nprint(total_m'
+  conc : ' = end_hour - start_hour\ntotal_melt = melting_rate * duration\nprint(total_melt'
+  alone: 'python>\n<parameter=code>\n# Days in the first period\ndays_period1 ='
+  conc : 'python>\n<parameter=code>\n# Calculate total cups needed in the first year (3'
+  alone: '=python>\n<parameter=code>\ntotal_games = 22\n# Let w'
+  conc : '=python>\n<parameter=code>\n# Let w be wins, l be losses\n'
+  alone: '>\n<parameter=code>\n# Let x be the number of cookies Henry baked last year'
+  conc : '>\n<parameter=code>\n# Let L be the number of cookies Henry baked last year'
+  alone: '\ntotal_cars = 20\nautomatic = 12\nmanual = 4\n'
+  conc : '\ntotal_cars = 20\nautomatic_cars = 12\nmanual_cars'
+  alone: 'cost_sugar_per_gallon = 2\nselling_price_per_glass = 0.5'
+  conc : 'cost_sugar_per_gallon = 2\nprice_per_glass = 0.50'
+  alone: ' trees after 10 years before any die\ntrees_after_10_years = initial_trees +'
+  conc : ' trees after 10 years before any die\ntotal_trees_after_years = initial_trees + (net'
+  alone: 'python>\n<parameter=code>\ngreen_pens = 22\nyellow_pens'
+  conc : 'python>\n<parameter=code>\ngreen = 22\nyellow = 10'
+  alone: ' 4 = 16 gallons.\n\n# Current state:\n# b = 4 *'
+  conc : ' 4 = 16 gallons.\n\n# 4 minutes ago:\n# Small pool had'
+  alone: '_diff * calories_per_cookie\n\nprint(f"Sue\'s cookies: {total_sue}, Sister\'s'
+  conc : '_diff * calories_per_cookie\n\nprint(f"Sue ate {total_sue} cookies, sister ate'
+  alone: '>\n<parameter=code>\n# Given values\nandrea_apples = 52'
+  conc : '>\n<parameter=code>\n# Given:\n# Andrea has 52 apples\n'
+  alone: ' = total_price - budget\nprint(f"Total Price: {total_price}")\nprint(f"D'
+  conc : ' = total_price - budget\nprint(f"Total price: {total_price}")\nprint(f"D'

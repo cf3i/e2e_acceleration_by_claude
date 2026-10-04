@@ -1,0 +1,53 @@
+{
+  "engine": "p2_s09",
+  "options": {
+    "linear_attn_fast_path": true,
+    "cudnn_sdpa": false,
+    "num_slots": 64,
+    "max_len": 2048,
+    "compile_decode": true,
+    "gqa_decode_attn": true,
+    "prefix_reuse": true,
+    "force_max": 128,
+    "inplace_state": true,
+    "fp8": "tensor",
+    "buckets": [
+      8,
+      16,
+      24,
+      32,
+      48
+    ],
+    "state_dtype": "bf16",
+    "recurrent_launch": "tuned"
+  },
+  "num_slots": 64,
+  "step_ms": 23.18163875490427,
+  "steps": 100,
+  "bucket_ms": {
+    "8": 15.678285025060177,
+    "16": 16.74427703022957,
+    "24": 17.93514147400856,
+    "32": 18.6801078915596,
+    "48": 20.874311327934265,
+    "64": 23.12405474483967
+  },
+  "peak_mem_gb": 55.015250432,
+  "env": {
+    "host": "orix-worker-h100-5",
+    "slurm_job_id": "297338",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.5.4",
+    "git_commit": "b33e2b368b2c4654fa822f4f0a9429d93e69bd51",
+    "snapshot": true,
+    "git_dirty": false,
+    "argv": [
+      "bench/profile_batch.py",
+      "--stage",
+      "p2_s09_recurrent_launch",
+      "--engine",
+      "p2_s09"
+    ]
+  }
+}

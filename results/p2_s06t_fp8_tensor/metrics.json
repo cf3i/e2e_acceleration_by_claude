@@ -1,0 +1,77 @@
+{
+  "stage": "p2_s06t_fp8_tensor",
+  "engine": "p2_s06t",
+  "engine_options": {
+    "linear_attn_fast_path": true,
+    "cudnn_sdpa": false,
+    "num_slots": 32,
+    "max_len": 2048,
+    "compile_decode": true,
+    "gqa_decode_attn": true,
+    "prefix_reuse": true,
+    "force_max": 128,
+    "inplace_state": true,
+    "fp8": "tensor"
+  },
+  "runner": "continuous_async",
+  "config": {
+    "engine": "p2_s06t",
+    "runner": "continuous_async",
+    "num_tasks": 128,
+    "repeats": 1,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "device": "cuda"
+  },
+  "load_s": 119.11130561679602,
+  "makespan_s_all": [
+    28.59808095358312
+  ],
+  "makespan_s": 28.59808095358312,
+  "tasks": 128,
+  "accuracy": 0.9375,
+  "tasks_per_min": 268.549488074575,
+  "turns": 255,
+  "tool_calls": 127,
+  "gen_tokens": 21134,
+  "prompt_tokens": 126751,
+  "redundant_prefill_tokens": 69503,
+  "gen_tok_per_s_e2e": 739.0006355427171,
+  "decode_ms_per_token": 1.2547569560393148,
+  "prefill_tok_per_s": 81906.6607195016,
+  "task_latency_p50_s": 5.429261578246951,
+  "task_latency_p90_s": 8.763051075860858,
+  "finish_reasons": {
+    "answer": 125,
+    "no_answer": 3
+  },
+  "engine_stats": {
+    "prefill_calls": 5,
+    "prefill_tokens": 1212,
+    "reused_turn": 68284,
+    "reused_shared": 45760,
+    "forced_tokens": 11847,
+    "decode_steps": 1251,
+    "live_row_steps": 32979
+  },
+  "peak_mem_gb": 51.23694467544556,
+  "env": {
+    "host": "orix-worker-h100-5",
+    "slurm_job_id": "297237",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.5.4",
+    "git_commit": "759b3e549cb3d5e69f57ec9db68d3a89effaa7a4",
+    "snapshot": true,
+    "git_dirty": false,
+    "argv": [
+      "bench/run_bench.py",
+      "--stage",
+      "p2_s06t_fp8_tensor",
+      "--engine",
+      "p2_s06t",
+      "--runner",
+      "continuous_async"
+    ]
+  }
+}

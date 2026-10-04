@@ -1,0 +1,88 @@
+{
+  "stage": "p2_s08_bf16_state",
+  "engine": "p2_s08",
+  "engine_options": {
+    "linear_attn_fast_path": true,
+    "cudnn_sdpa": false,
+    "num_slots": 64,
+    "max_len": 2048,
+    "compile_decode": true,
+    "gqa_decode_attn": true,
+    "prefix_reuse": true,
+    "force_max": 128,
+    "inplace_state": true,
+    "fp8": "tensor",
+    "buckets": [
+      8,
+      16,
+      24,
+      32,
+      48
+    ],
+    "state_dtype": "bf16",
+    "recurrent_launch": null
+  },
+  "runner": "continuous_async",
+  "config": {
+    "engine": "p2_s08",
+    "runner": "continuous_async",
+    "num_tasks": 128,
+    "repeats": 1,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "device": "cuda"
+  },
+  "load_s": 551.7114019691944,
+  "makespan_s_all": [
+    23.54806426540017
+  ],
+  "makespan_s": 23.54806426540017,
+  "tasks": 128,
+  "accuracy": 0.9375,
+  "tasks_per_min": 326.1414574651233,
+  "turns": 255,
+  "tool_calls": 127,
+  "gen_tokens": 21152,
+  "prompt_tokens": 126757,
+  "redundant_prefill_tokens": 69438,
+  "gen_tok_per_s_e2e": 898.2479307685271,
+  "decode_ms_per_token": 0.9917029253926329,
+  "prefill_tok_per_s": 69009.8205923183,
+  "task_latency_p50_s": 7.361484155058861,
+  "task_latency_p90_s": 11.061509972438216,
+  "finish_reasons": {
+    "answer": 125,
+    "no_answer": 3
+  },
+  "engine_stats": {
+    "prefill_calls": 6,
+    "prefill_tokens": 1456,
+    "reused_turn": 67658,
+    "reused_shared": 46112,
+    "forced_tokens": 11883,
+    "decode_steps": 947,
+    "live_row_steps": 33033,
+    "computed_row_steps": 36512,
+    "row_swaps": 346
+  },
+  "peak_mem_gb": 51.23694467544556,
+  "env": {
+    "host": "orix-worker-h100-5",
+    "slurm_job_id": "297331",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.5.4",
+    "git_commit": "b33e2b368b2c4654fa822f4f0a9429d93e69bd51",
+    "snapshot": true,
+    "git_dirty": false,
+    "argv": [
+      "bench/run_bench.py",
+      "--stage",
+      "p2_s08_bf16_state",
+      "--engine",
+      "p2_s08",
+      "--runner",
+      "continuous_async"
+    ]
+  }
+}

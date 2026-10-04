@@ -1,0 +1,87 @@
+WARNING: Device-side CUDA Event completion trace is currently enabled.
+         This may increase runtime overhead and the likelihood of false
+         dependencies across CUDA Streams. If you wish to avoid this, please
+         disable the feature with --cuda-event-trace=false.
+Failed to load /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_cutlass_90a.abi3.so: Could not load this library: /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_cutlass_90a.abi3.so
+Failed to load /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_mxfp8.cpython-310-x86_64-linux-gnu.so: Could not load this library: /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_mxfp8.cpython-310-x86_64-linux-gnu.so
+Loading weights:   0%|          | 0/851 [00:00<?, ?it/s]Loading weights: 100%|██████████| 851/851 [00:00<00:00, 10954.18it/s]
+fp8: weights now 29.4 GB on device
+batch decode graphs (S=64, buckets [8, 16, 24, 32, 48, 64]) captured in 495.7s, cache 12.7 GiB
+p2_s09: S=8, step 15.69 ms (1.962 ms per row)
+bucket replay ms: {8: 15.65, 16: 16.75, 24: 17.93, 32: 18.74, 48: 20.89, 64: 23.28}
+Capture range started in the application.
+Capture range ended in the application.
+Generating '/home/feic/.cache/codex-tmp/nsys-report-0222.qdstrm'
+[1/1] [0%                          ] nsys.nsys-repProcessing events...
+[1/1] [0%                          ] nsys.nsys-rep[1/1] [==18%                       ] nsys.nsys-rep[1/1] [=======37%                  ] nsys.nsys-rep[1/1] [================68%         ] nsys.nsys-rep[1/1] [========================99% ] nsys.nsys-rep[1/1] [5%                          ] nsys.nsys-rep[1/1] [===========51%              ] nsys.nsys-rep[1/1] [======34%                   ] nsys.nsys-rep[1/1] [====26%                     ] nsys.nsys-rep[1/1] [===22%                      ] nsys.nsys-rep[1/1] [=========44%                ] nsys.nsys-rep[1/1] [============56%             ] nsys.nsys-rep[1/1] [===============67%          ] nsys.nsys-rep[1/1] [=================74%        ] nsys.nsys-rep[1/1] [========================100%] nsys.nsys-rep[1/1] [========================100%] nsys.nsys-rep
+Generated:
+	/mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/runs/p2_s09_recurrent_launch/live8-profile_batch-0b87621-1004-182918/results/p2_s09_recurrent_launch/live8/profile/nsys.nsys-rep
+
+## NVTX ranges (L1 sections): (no data)
+
+## GPU kernels: total 0.30s over 43420 instances
+ time%   total_s     count    avg_us  name
+  29.4     0.089      2560      34.6  nvjet_qqtst_192x8_128x8_4x1_v_bz_TNT
+  28.6     0.086      4480      19.3  nvjet_qqtst_64x8_128x16_4x1_v_bz_TNT
+   7.1     0.022       340      63.3  nvjet_tst_512x8_64x3_2x1_v_bz_TNT
+   6.5     0.020       960      20.3  nvjet_qqtst_128x8_128x12_4x1_v_bz_TNT
+   4.0     0.012      1920       6.2  nvjet_qqtst_64x8_128x16_1x1_v_bz_TNT
+   3.6     0.011       960      11.4  fused_recurrent_gated_delta_rule_fwd_kernel
+   2.2     0.007      4800       1.4  triton_per_fused__scaled_mm__to_copy_abs_amax_clamp_div_t_view_1
+   1.5     0.004       320      13.9  nvjet_tst_64x8_64x16_2x1_v_bz_NNT
+   1.5     0.004      3520       1.3  triton_per_fused__scaled_mm__to_copy_abs_add_amax_clamp_div_mean_mul_pow_rsqrt_t_view_1
+   1.3     0.004      1280       3.0  triton_red_fused__to_copy_abs_add_amax_mean_mul_pow_rsqrt_0
+   1.1     0.003       960       3.4  void causal_conv1d_update_kernel<Causal_conv1d_update_kernel_traits<(int)64, (int)4, c10::BFloat16, c10::BFloa
+   1.1     0.003      1920       1.7  triton_poi_fused__scaled_mm__to_copy_clamp_div_t_view_2
+   0.9     0.003       960       2.9  triton_red_fused_abs_amax_mul_silu_view_3
+   0.8     0.003       960       2.6  void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::dire
+   0.8     0.002       980       2.5  triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0
+   0.8     0.002       960       2.4  layer_norm_gated_fwd_kernel
+   0.7     0.002      1280       1.6  triton_poi_fused__scaled_mm__to_copy_add_clamp_div_mean_mul_pow_rsqrt_t_view_2
+   0.6     0.002       960       1.9  triton_red_fused_abs_amax_view_0
+   0.6     0.002       960       1.9  triton_red_fused_abs_amax_0
+   0.6     0.002       960       1.8  triton_poi_fused__scaled_mm__to_copy_clamp_div_mul_silu_t_view_5
+   0.5     0.002       960       1.6  triton_poi_fused_add_view_6
+   0.5     0.001       960       1.5  triton_poi_fused__to_copy_add_exp_mul_neg_softplus_view_4
+   0.5     0.001       960       1.5  triton_per_fused__scaled_mm__to_copy_abs_amax_clamp_div_mul_silu_t_view_4
+   0.5     0.001       960       1.4  triton_poi_fused_clone_expand_split_with_sizes_transpose_unsqueeze_view_5
+   0.4     0.001       960       1.4  triton_poi_fused_clone_expand_split_with_sizes_transpose_unsqueeze_view_6
+
+## CUDA API (host side): total 0.37s over 142 instances
+ time%   total_s     count    avg_us  name
+  84.0     0.311        20   15541.3  cudaEventSynchronize
+  15.9     0.059        20    2937.5  cudaGraphLaunch_v10000
+   0.1     0.000        20      12.4  cudaMemcpyAsync
+   0.0     0.000        20       4.3  cudaEventRecordWithFlags_v11010
+   0.0     0.000        60       1.1  cudaStreamIsCapturing_v10000
+   0.0     0.000         1      33.5  cudaDeviceSynchronize
+   0.0     0.000         1       3.9  cuProfilerStart
+
+## GPU memcpy/memset: total 0.00s over 100 instances
+ time%   total_s     count    avg_us  name
+  38.1     0.000        40       1.2  [CUDA memcpy Device-to-Device]
+  38.0     0.000        20       2.4  [CUDA memcpy Device-to-Host]
+  23.9     0.000        40       0.8  [CUDA memset]
+
+## CUDA-graph kernels: 20 replays, 2171 kernels/replay, 15.07 ms GPU time/replay
+  GEMM                            77.1%   11.62 ms/replay     529 kernels/replay  avg   22.0 us
+  triton (inductor)               16.4%    2.47 ms/replay    1443 kernels/replay  avg    1.7 us
+  fla/conv1d                       5.5%    0.83 ms/replay     144 kernels/replay  avg    5.8 us
+  torch elementwise/copy/other     0.9%    0.14 ms/replay      54 kernels/replay  avg    2.7 us
+  torch reduce                     0.1%    0.01 ms/replay       1 kernels/replay  avg   10.2 us
+ time%  us/replay  n/replay   avg_us  name
+  29.4     4434.9       128     34.6  nvjet_qqtst_192x8_128x8_4x1_v_bz_TNT
+  28.6     4313.2       224     19.3  nvjet_qqtst_64x8_128x16_4x1_v_bz_TNT
+   7.1     1075.8        17     63.3  nvjet_tst_512x8_64x3_2x1_v_bz_TNT
+   6.5      975.1        48     20.3  nvjet_qqtst_128x8_128x12_4x1_v_bz_TNT
+   4.0      597.7        96      6.2  nvjet_qqtst_64x8_128x16_1x1_v_bz_TNT
+   3.6      549.5        48     11.4  fused_recurrent_gated_delta_rule_fwd_kernel
+   2.2      327.3       240      1.4  triton_per_fused__scaled_mm__to_copy_abs_amax_clamp_div_t_view_1
+   1.5      222.8        16     13.9  nvjet_tst_64x8_64x16_2x1_v_bz_NNT
+   1.5      220.5       176      1.3  triton_per_fused__scaled_mm__to_copy_abs_add_amax_clamp_div_mean_mul_pow_rsqrt_t_view_1
+   1.3      190.3        64      3.0  triton_red_fused__to_copy_abs_add_amax_mean_mul_pow_rsqrt_0
+   1.1      164.6        48      3.4  causal_conv1d_update_kernel
+   1.1      159.1        96      1.7  triton_poi_fused__scaled_mm__to_copy_clamp_div_t_view_2
+   0.9      138.6        48      2.9  triton_red_fused_abs_amax_mul_silu_view_3
+   0.8      126.8        48      2.6  elementwise_kernel
+   0.8      123.5        49      2.5  triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0
