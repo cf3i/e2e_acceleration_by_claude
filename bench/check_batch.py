@@ -8,6 +8,9 @@ With prefix reuse it also checks the two reuse paths against a full prefill (sam
 float differences from processing the prompt in two chunks):
   shared: fresh prefill on top of the restored shared-prefix snapshot;
   extend: prefill ids[:-17] first, then the full prompt extends the slot by 17 tokens.
+Batch buckets: a sequence decoded alone runs in the smallest graph, concurrently in bigger ones, and GEMMs of a
+different M may pick different kernels (and per-tensor FP8 activation scales couple the rows of a batch), so
+bit-identity is only expected with `--one-bucket` and row-independent numerics (`--opt fp8='"row"'`).
 With forced-token prefill (`force_max`) both reuse paths feed the suffix through the decode graph instead, and
 the alone / concurrent runs start turns with `submit` (so forced rows mix with generating rows), and in the
 concurrent run every odd prompt is suspended for 7 steps after 10 tokens and resumed by submitting its tokens +
@@ -38,9 +41,15 @@ def main():
     ap.add_argument("--num-tasks", type=int, default=8)
     ap.add_argument("--max-new-tokens", type=int, default=256)
     ap.add_argument("--stagger", type=int, default=5, help="decode steps between admissions")
+    ap.add_argument("--opt", action="append", default=[], help="preset override key=json, e.g. fp8='\"row\"'")
+    ap.add_argument("--one-bucket", action="store_true",
+                    help="always replay the full-S graph (row compaction still runs): isolates swap bugs from "
+                         "batch-size-dependent numerics")
     args = ap.parse_args()
 
-    engine = make_engine(args.engine)
+    engine = make_engine(args.engine, **{k: json.loads(v) for k, v in (o.split("=", 1) for o in args.opt)})
+    if args.one_bucket:
+        engine.buckets = [engine.num_slots]
     tok = engine.tok
     prompts = [tok.encode(AgentState(t).prompt_text(tok), add_special_tokens=False)
                for t in load_tasks(args.num_tasks)]
@@ -77,7 +86,7 @@ def main():
             rows.append({"identical": a == b, "first_divergence": div, "len_a": len(a), "len_b": len(b)})
         return rows
 
-    report = {"engine": args.engine}
+    report = {"engine": args.engine, "opt": args.opt, "one_bucket": args.one_bucket}
     reuse = engine.options.get("prefix_reuse", False)
     if reuse:
         engine.prefix_reuse, engine.force_max = False, 0
