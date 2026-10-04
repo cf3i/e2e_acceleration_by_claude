@@ -27,12 +27,14 @@ def main():
     ap.add_argument("--engine", required=True)
     ap.add_argument("--steps", type=int, default=100)
     ap.add_argument("--trace-steps", type=int, default=20)
+    ap.add_argument("--live", type=int, default=None, help="fill only this many slots (profiles a small bucket)")
+    ap.add_argument("--tag", default="", help="suffix of the output files")
     args = ap.parse_args()
     out = ROOT / "results" / args.stage / "profile"
     out.mkdir(parents=True, exist_ok=True)
 
     engine = make_engine(args.engine)
-    S, tok = engine.num_slots, engine.tok
+    S, tok = args.live or engine.num_slots, engine.tok
     tasks = load_tasks(S)
     for s, t in enumerate(tasks):
         engine.prefill(s, tok.encode(AgentState(t).prompt_text(tok), add_special_tokens=False))
@@ -62,8 +64,8 @@ def main():
         engine.step()
     torch.cuda.synchronize()
     torch.cuda.profiler.stop()
-    (out / "batch_step.json").write_text(json.dumps(
-        {"engine": args.engine, "options": engine.options, "num_slots": S, "step_ms": step_ms,
+    (out / f"batch_step{args.tag}.json").write_text(json.dumps(
+        {"engine": args.engine, "options": engine.options, "live": S, "step_ms": step_ms,
          "steps": args.steps, "bucket_ms": bucket_ms, "peak_mem_gb": torch.cuda.max_memory_allocated() / 1e9, "env": env_info()}, indent=2))
 
 
