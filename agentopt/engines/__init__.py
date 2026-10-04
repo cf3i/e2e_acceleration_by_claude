@@ -28,6 +28,9 @@ PRESETS.update({
                          "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": "row"}),
     "p2_s06t": ("batch", {**_P1, "num_slots": 32,                 # FP8 with per-tensor scales (cuBLASLt)
                           "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": "tensor"}),
+    "p2_s07": ("batch", {**_P1, "num_slots": 64,                  # 64 slots, per-bucket graphs over compacted rows
+                         "prefix_reuse": True, "force_max": 128, "inplace_state": True, "fp8": "tensor",
+                         "buckets": (8, 16, 24, 32, 48)}),
 })
 
 

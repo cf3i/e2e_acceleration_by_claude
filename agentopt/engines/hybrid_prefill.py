@@ -35,6 +35,6 @@ def _wrap_conv(conv_fn, cache):
 def _wrap_chunk(chunk_fn, cache, layer_idx):
     def chunk(q, k, v, g=None, beta=None, initial_state=None, **kw):
         if cache.extending:
-            initial_state = cache.layers[layer_idx].recurrent_states[cache.slot:cache.slot + 1]
+            initial_state = cache.layers[layer_idx].rec_full[cache.slot:cache.slot + 1]
         return chunk_fn(q, k, v, g=g, beta=beta, initial_state=initial_state, **kw)
     return chunk

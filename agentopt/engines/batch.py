@@ -31,6 +31,11 @@ Suspend (for asynchronous tools): every replay updates the Gated-DeltaNet states
 or not, so a slot whose agent is waiting for a tool would have its recurrent state overwritten by garbage. KV is
 safe (a parked row writes only to the scratch position). suspend() saves the slot's conv/recurrent states and
 parks the row; resume (inside submit) copies them back and moves the row back to its real end.
+
+Batch buckets (optional, `buckets`): one CUDA graph per bucket size B, each computing only rows [0, B). Live
+sequences are kept compacted in the lowest rows (logical slot -> physical row map; when a sequence stops being
+live its row is swapped with the last live row, a few device copies), and each step replays the smallest
+bucket >= #live. So the run can use many slots while it is full and stop paying for empty rows in the tail.
 """
 import collections
 import os
@@ -45,11 +50,11 @@ from .slot_cache import SlotCache
 class BatchEngine(NaiveEngine):
     def __init__(self, num_slots: int = 32, max_len: int = 2048, compile_decode: bool = True,
                  gqa_decode_attn: bool = True, prefix_reuse: bool = False, force_max: int = 0,
-                 inplace_state: bool = False, fp8: str | None = None, **kw):
+                 inplace_state: bool = False, fp8: str | None = None, buckets: tuple | None = None, **kw):
         super().__init__(**kw)
         self.options.update(num_slots=num_slots, max_len=max_len, compile_decode=compile_decode,
                             gqa_decode_attn=gqa_decode_attn, prefix_reuse=prefix_reuse, force_max=force_max,
-                            inplace_state=inplace_state, fp8=fp8)
+                            inplace_state=inplace_state, fp8=fp8, buckets=buckets)
         assert prefix_reuse or not force_max, "forced-token prefill only feeds suffixes of reusable state"
         if fp8:
             from .quant import fp8_quantize
@@ -92,42 +97,81 @@ class BatchEngine(NaiveEngine):
         self.force_q = [collections.deque() for _ in range(S)]  # suffix tokens still to feed into slot s
         self.suspended = {}  # slot -> saved linear-attention states while its agent waits for a tool
         self.shared = None             # (tokens, snapshot) of the shared prefix
+        self.compact = buckets is not None
+        self.buckets = sorted(set(buckets or ()) | {S})
+        self.row = list(range(S))    # logical slot -> physical row (identity unless compacting)
+        self.owner = list(range(S))  # physical row -> logical slot
         self.reset_stats()
         t0 = time.perf_counter()
         self._capture()
-        print(f"batch decode graph (S={S}) captured in {time.perf_counter() - t0:.1f}s, "
+        print(f"batch decode graphs (S={S}, buckets {self.buckets}) captured in {time.perf_counter() - t0:.1f}s, "
               f"cache {self.cache.memory_bytes() / 2**30:.1f} GiB", flush=True)
 
-    def _step(self):
-        self.mask_buf.view(self.num_slots, self.max_len).index_put_((self.rows, self.pos_buf), self.trues)
-        tok = torch.where(self.force_dev[1].view(-1, 1) > 0, self.force_dev[0].view(-1, 1), self.tok_buf)
-        out = self.decode_model(input_ids=tok, position_ids=self.pos_buf.view(-1, 1),
-                                attention_mask=self.mask_buf, past_key_values=self.cache, use_cache=True)
-        self.out_buf.copy_(out.logits[:, -1].argmax(-1))
-        self.tok_buf.copy_(self.out_buf.view(-1, 1))
-        self.pos_buf.add_(1).clamp_(max=self.park)
+    def _step(self, B: int):
+        """One decode step for rows [0, B)."""
+        mask, pos = self.mask_buf[:B], self.pos_buf[:B]
+        mask.view(B, self.max_len).index_put_((self.rows[:B], pos), self.trues[:B])
+        tok = torch.where(self.force_dev[1, :B].view(-1, 1) > 0, self.force_dev[0, :B].view(-1, 1), self.tok_buf[:B])
+        out = self.decode_model(input_ids=tok, position_ids=pos.view(-1, 1),
+                                attention_mask=mask, past_key_values=self.cache, use_cache=True)
+        self.out_buf[:B].copy_(out.logits[:, -1].argmax(-1))
+        self.tok_buf[:B].copy_(self.out_buf[:B].view(-1, 1))
+        pos.add_(1).clamp_(max=self.park)
 
     @torch.inference_mode()
     def _capture(self):
         self.prefill(0, list(range(16)))  # allocates the slot storage (lazy, from HF's own tensors)
         self.cache.begin_decode()
-        s = torch.cuda.Stream()
-        s.wait_stream(torch.cuda.current_stream())
-        with torch.cuda.stream(s):
-            for _ in range(3):
-                self._step()
-        torch.cuda.current_stream().wait_stream(s)
-        self.graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(self.graph):
-            self._step()
+        self.graphs, pool = {}, None
+        for B in sorted(self.buckets, reverse=True):  # largest first; the others reuse its memory pool
+            self.cache.set_rows(B)
+            s = torch.cuda.Stream()
+            s.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(s):
+                for _ in range(3):
+                    self._step(B)
+            torch.cuda.current_stream().wait_stream(s)
+            g = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(g, pool=pool):
+                self._step(B)
+            pool = g.pool()
+            self.graphs[B] = g
+        self.cache.set_rows(self.num_slots)
         torch.cuda.synchronize()
         for slot in range(self.num_slots):
             self.release(slot)
 
+    # --- live-row compaction (logical slot <-> physical row) ---
+    def _swap(self, a: int, b: int):
+        self.cache.swap_rows(a, b)
+        for buf in (self.mask_buf, self.pos_buf, self.tok_buf):
+            tmp = buf[a].clone()
+            buf[a].copy_(buf[b])
+            buf[b].copy_(tmp)
+        sa, sb = self.owner[a], self.owner[b]
+        self.owner[a], self.owner[b] = sb, sa
+        self.row[sa], self.row[sb] = b, a
+        self.stats["row_swaps"] += 1
+
+    def _activate(self, slot: int):
+        """Mark slot live; with compaction move it to row #live (live rows always occupy [0, #live))."""
+        if slot in self.live:
+            return
+        if self.compact and self.row[slot] != len(self.live):
+            self._swap(self.row[slot], len(self.live))
+        self.live.add(slot)
+
+    def _deactivate(self, slot: int):
+        if slot not in self.live:
+            return
+        if self.compact and self.row[slot] != len(self.live) - 1:
+            self._swap(self.row[slot], len(self.live) - 1)
+        self.live.discard(slot)
+
     def reset_stats(self):
         self.stats = {"prefill_calls": 0, "prefill_tokens": 0, "reused_turn": 0, "reused_shared": 0,
                       "forced_tokens": 0,
-                      "decode_steps": 0, "live_row_steps": 0}
+                      "decode_steps": 0, "live_row_steps": 0, "computed_row_steps": 0, "row_swaps": 0}
 
     @staticmethod
     def _is_prefix(p, ids):
@@ -138,35 +182,36 @@ class BatchEngine(NaiveEngine):
         """Prefill `ids` once and keep a snapshot of the resulting state for every later fresh prefill."""
         self.shared = None
         self.prefill(0, ids)
-        self.shared = (list(ids), self.cache.snapshot(0, len(ids)))
+        self.shared = (list(ids), self.cache.snapshot(self.row[0], len(ids)))
         self.release(0)
 
     @torch.inference_mode()
     def prefill(self, slot: int, input_ids: list[int]) -> int:
         n = len(input_ids)
         assert n < self.park, "prompt exceeds max_len"
+        self._activate(slot)
+        r = self.row[slot]
         start = 0
         if self.prefix_reuse and self._is_prefix(self.slot_tokens[slot], input_ids):
             start = len(self.slot_tokens[slot])
             self.stats["reused_turn"] += start
         elif self.prefix_reuse and self.shared is not None and self._is_prefix(self.shared[0], input_ids):
-            self.cache.restore(slot, self.shared[1])
+            self.cache.restore(r, self.shared[1])
             start = len(self.shared[0])
             self.stats["reused_shared"] += start
         self.stats["prefill_calls"] += 1
         self.stats["prefill_tokens"] += n - start
-        self.cache.begin_prefill(slot, start, n - start)
+        self.cache.begin_prefill(r, start, n - start)
         out = self.model(input_ids=torch.tensor([input_ids[start:]], device=self.device),
                          position_ids=torch.arange(start, n, device=self.device).view(1, -1),
                          past_key_values=self.cache, use_cache=True, logits_to_keep=1)
         self.cache.begin_decode()
         next_id = int(out.logits[0, -1].argmax())
-        self.mask_buf[slot].zero_()
-        self.mask_buf[slot, ..., :n] = True
-        self.tok_buf[slot] = next_id
-        self.pos_buf[slot] = n
+        self.mask_buf[r].zero_()
+        self.mask_buf[r, ..., :n] = True
+        self.tok_buf[r] = next_id
+        self.pos_buf[r] = n
         self.slot_tokens[slot], self.next_tok[slot] = list(input_ids), next_id
-        self.live.add(slot)
         return next_id
 
     @torch.inference_mode()
@@ -188,43 +233,47 @@ class BatchEngine(NaiveEngine):
             return self.prefill(slot, input_ids)
         if n - start > self.force_max:
             return self.prefill(slot, input_ids)
+        self._activate(slot)
+        r = self.row[slot]
         if kind == "reused_shared":
-            self.cache.restore(slot, self.shared[1])
-            self.mask_buf[slot].zero_()
-            self.mask_buf[slot, ..., :start] = True
-            self.pos_buf[slot] = start
+            self.cache.restore(r, self.shared[1])
+            self.mask_buf[r].zero_()
+            self.mask_buf[r, ..., :start] = True
+            self.pos_buf[r] = start
             self.slot_tokens[slot] = list(input_ids[:start])
         self.stats[kind] += start
         self.stats["forced_tokens"] += n - start
         self.force_q[slot] = collections.deque(input_ids[start:])
         self.next_tok[slot] = None
-        self.live.add(slot)
         return None
 
     @torch.inference_mode()
     def suspend(self, slot: int):
         """Take a slot out of decoding while keeping its state (its tokens / KV stay, its row is parked)."""
         assert not self.force_q[slot], "cannot suspend while consuming a suffix"
-        self.suspended[slot] = [(l.conv_states[slot].clone(), l.recurrent_states[slot].clone())
+        r = self.row[slot]
+        self.suspended[slot] = [(l.conv_full[r].clone(), l.rec_full[r].clone())
                                 if l is not None else None for l in self.cache.layers]
-        self.pos_buf[slot] = self.park
-        self.live.discard(slot)
+        self.pos_buf[r] = self.park
+        self._deactivate(slot)
 
     def _resume(self, slot: int):
+        self._activate(slot)
+        r = self.row[slot]
         for l, saved in zip(self.cache.layers, self.suspended.pop(slot)):
             if saved is not None:
-                l.conv_states[slot].copy_(saved[0])
-                l.recurrent_states[slot].copy_(saved[1])
-        self.mask_buf[slot, ..., self.park] = False  # the parked steps marked the scratch position
-        self.pos_buf[slot] = len(self.slot_tokens[slot])
-        self.live.add(slot)
+                l.conv_full[r].copy_(saved[0])
+                l.rec_full[r].copy_(saved[1])
+        self.mask_buf[r, ..., self.park] = False  # the parked steps marked the scratch position
+        self.pos_buf[r] = len(self.slot_tokens[slot])
 
     def release(self, slot: int):
         self.suspended.pop(slot, None)
         self.force_q[slot].clear()
-        self.mask_buf[slot].zero_()
-        self.pos_buf[slot] = self.park
-        self.live.discard(slot)
+        self._deactivate(slot)
+        r = self.row[slot]
+        self.mask_buf[r].zero_()
+        self.pos_buf[r] = self.park
         self.slot_tokens[slot] = self.next_tok[slot] = None
 
     def room(self, slot_len: int) -> int:
@@ -233,25 +282,28 @@ class BatchEngine(NaiveEngine):
 
     @torch.inference_mode()
     def step(self) -> dict[int, int]:
+        B = next(b for b in self.buckets if b >= len(self.live))
         forcing = [s for s in self.live if self.force_q[s]]
         if forcing or self.force_host[1].any():
             self.force_host.zero_()
             for s in forcing:
-                self.force_host[0, s], self.force_host[1, s] = self.force_q[s][0], 1
+                r = self.row[s]
+                self.force_host[0, r], self.force_host[1, r] = self.force_q[s][0], 1
             self.force_dev.copy_(self.force_host, non_blocking=True)  # host buffer reused only after the sync
-        self.graph.replay()
+        self.graphs[B].replay()
         self.host_buf.copy_(self.out_buf, non_blocking=True)
         self.event.record()
         self.event.synchronize()
         out = self.host_buf.tolist()
         self.stats["decode_steps"] += 1
         self.stats["live_row_steps"] += len(self.live)
+        self.stats["computed_row_steps"] += B
         emitted = {}
         for s in self.live:  # the step fed the head of the forced queue, else next_tok[s], into slot s
             q = self.force_q[s]
             self.slot_tokens[s].append(q.popleft() if q else self.next_tok[s])
             if not q:
-                self.next_tok[s] = emitted[s] = out[s]
+                self.next_tok[s] = emitted[s] = out[self.row[s]]
         return emitted
 
     @torch.inference_mode()
