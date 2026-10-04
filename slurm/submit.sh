@@ -13,6 +13,7 @@ snap=runs/${stage}-${kind}-${rev:0:7}-$(date +%m%d-%H%M%S)
 mkdir -p "$snap/slurm/logs"
 git archive HEAD | tar -x -C "$snap"
 echo "$rev" > "$snap/REVISION"
+rm -rf "$snap/results"
 ln -s "$PWD/results" "$snap/results"
 ln -s "$PWD/.venv" "$snap/.venv"
 cd "$snap" && STAGE="$stage" ARGS="$*" sbatch --parsable "slurm/$kind.sbatch" | sed "s|$| $snap|"
