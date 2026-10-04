@@ -11,6 +11,8 @@ PRESETS = {
                           "async_readback": True}),
     "p1_s06": ("static", {**_S02, "cuda_graph": True,          # + torch.compile (inductor) the decode forward
                           "async_readback": True, "compile_decode": True}),
+    "p1_s07": ("static", {**_S02, "cuda_graph": True,          # + GQA-folded GEMM attention for decode
+                          "async_readback": True, "compile_decode": True, "gqa_decode_attn": True}),
 }
 
 

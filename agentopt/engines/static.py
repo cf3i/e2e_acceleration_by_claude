@@ -18,6 +18,9 @@ own graph around it) to fuse the thousands of tiny elementwise kernels (RMSNorm 
 residual adds, copies) per step. Ops dynamo cannot trace (causal-conv1d C++ op, fla Triton autograd functions)
 become graph breaks; that only limits fusion, the whole step is still one CUDA graph.
 
+GQA decode attention (optional, `decode_attention.py`): single-token attention as two batched GEMMs with the
+query heads folded per KV head, instead of HF's repeat_kv copy + memory-efficient kernel over all slots.
+
 Async readback (optional): replaying a ~3.6k-node graph costs milliseconds of CPU, and with a blocking read per
 token that CPU time is not overlapped with GPU work. With `async_readback` the engine enqueues step k+1 before
 waiting for token k (copied to pinned host memory + event), so launch overlaps execution. When token k is a stop
@@ -34,11 +37,15 @@ from .naive import NaiveEngine
 
 class StaticEngine(NaiveEngine):
     def __init__(self, max_cache_len: int = 4096, cuda_graph: bool = False, async_readback: bool = False,
-                 compile_decode: bool = False, **kw):
+                 compile_decode: bool = False, gqa_decode_attn: bool = False, **kw):
         super().__init__(**kw)
+        if gqa_decode_attn:
+            from .decode_attention import install
+            install(self.model)
         assert cuda_graph or not async_readback, "async_readback requires cuda_graph"
         self.options.update(static_cache=True, max_cache_len=max_cache_len, cuda_graph=cuda_graph,
-                            async_readback=async_readback, compile_decode=compile_decode)
+                            async_readback=async_readback, compile_decode=compile_decode,
+                            gqa_decode_attn=gqa_decode_attn)
         self.decode_model = self.model
         if compile_decode:
             # Inductor points an unset TRITON_CACHE_DIR at node-local /tmp, so every fla Triton kernel JIT-ed
