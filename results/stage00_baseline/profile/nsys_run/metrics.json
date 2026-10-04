@@ -1,0 +1,62 @@
+{
+  "stage": "stage00_baseline",
+  "engine": "naive",
+  "engine_options": {
+    "linear_attn_fast_path": false
+  },
+  "runner": "serial",
+  "config": {
+    "engine": "naive",
+    "runner": "serial",
+    "num_tasks": 4,
+    "repeats": 1,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "device": "cuda"
+  },
+  "load_s": 28.97029227204621,
+  "makespan_s_all": [
+    109.432847160846
+  ],
+  "makespan_s": 109.432847160846,
+  "tasks": 4,
+  "accuracy": 1.0,
+  "tasks_per_min": 2.1931257956511403,
+  "turns": 8,
+  "tool_calls": 4,
+  "gen_tokens": 613,
+  "prompt_tokens": 3882,
+  "redundant_prefill_tokens": 2133,
+  "gen_tok_per_s_e2e": 5.601608803058954,
+  "decode_ms_per_token": 164.02135548635948,
+  "prefill_tok_per_s": 403.59103388922716,
+  "task_latency_p50_s": 21.27332446165383,
+  "task_latency_p90_s": 60.868815671652555,
+  "finish_reasons": {
+    "answer": 4
+  },
+  "peak_mem_gb": 50.477145195007324,
+  "env": {
+    "host": "orix-worker-h100-4",
+    "slurm_job_id": "297001",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.5.4",
+    "git_commit": "9a77eaaee11f6b961a6cd6aee958386926429bfb",
+    "snapshot": true,
+    "git_dirty": false,
+    "argv": [
+      "bench/run_bench.py",
+      "--stage",
+      "stage00_baseline",
+      "--num-tasks",
+      "4",
+      "--out",
+      "results/stage00_baseline/profile/nsys_run",
+      "--engine",
+      "naive",
+      "--runner",
+      "serial"
+    ]
+  }
+}

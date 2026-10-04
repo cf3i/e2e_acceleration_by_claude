@@ -20,12 +20,13 @@ def show(rows, title, name_key, n=20):
     if not rows:
         print(f"\n## {title}: (no data)")
         return
+    ck = next(k for k in ("Instances", "Num Calls", "Count") if k in rows[0])  # column name differs per report
     total = sum(float(r["Total Time (ns)"]) for r in rows)
-    count = sum(int(r["Instances"]) for r in rows)
+    count = sum(int(r[ck]) for r in rows)
     print(f"\n## {title}: total {total / 1e9:.2f}s over {count} instances")
     print(f"{'time%':>6} {'total_s':>9} {'count':>9} {'avg_us':>9}  name")
     for r in rows[:n]:
-        print(f"{float(r['Time (%)']):6.1f} {float(r['Total Time (ns)']) / 1e9:9.3f} {int(r['Instances']):9d} "
+        print(f"{float(r['Time (%)']):6.1f} {float(r['Total Time (ns)']) / 1e9:9.3f} {int(r[ck]):9d} "
               f"{float(r['Avg (ns)']) / 1e3:9.1f}  {r[name_key][:110]}")
 
 

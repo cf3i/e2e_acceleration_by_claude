@@ -1,0 +1,58 @@
+
+## NVTX ranges (L1 sections): total 193.63s over 45 instances
+ time%   total_s     count    avg_us  name
+  92.7   179.522        10 17952232.3  :decode
+   6.9    13.346        10 1334619.1  :prefill
+   0.4     0.696         5  139154.1  :tool
+   0.0     0.061        10    6096.8  :template
+   0.0     0.002        10     244.7  :detokenize
+
+## GPU kernels: total 25.28s over 4520258 instances
+ time%   total_s     count    avg_us  name
+  23.9     6.039     99712      60.6  nvjet_tst_192x8_64x8_4x1_v_bz_TNT
+  23.2     5.855    149568      39.1  nvjet_tst_64x8_64x16_4x1_v_bz_TNT
+   6.7     1.689    581802       2.9  void at::native::unrolled_elementwise_kernel<at::native::direct_copy_kernel_cuda(at::TensorIteratorBase &)::[l
+   5.5     1.392     37392      37.2  nvjet_tst_128x8_64x12_4x1_v_bz_TNT
+   5.2     1.326    425631       3.1  void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::Bina
+   2.6     0.663       789     839.8  nvjet_tst_512x8_64x3_2x1_v_bz_TNT
+   2.3     0.574    164901       3.5  void at::native::reduce_kernel<(int)512, (int)1, at::native::ReduceOp<float, at::native::MeanOps<float, float,
+   1.9     0.472     82464       5.7  void at::native::reduce_kernel<(int)128, (int)4, at::native::ReduceOp<float, at::native::func_wrapper_t<float,
+   1.8     0.459    164112       2.8  void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::Bina
+   1.8     0.456    291930       1.6  void at::native::vectorized_elementwise_kernel<(int)4, at::native::CUDAFunctorOnSelf_add<float>, std::array<ch
+   1.7     0.433    280095       1.5  void at::native::vectorized_elementwise_kernel<(int)8, at::native::bfloat16_copy_kernel_cuda(at::TensorIterato
+   1.7     0.418    128320       3.3  void at::native::elementwise_kernel<(int)128, (int)4, void at::native::gpu_kernel_impl_nocast<at::native::dire
+   1.6     0.413     74784       5.5  nvjet_tst_64x8_64x16_1x1_v_bz_splitK_TNT
+   1.1     0.290    164901       1.8  void at::native::vectorized_elementwise_kernel<(int)4, at::native::rsqrt_kernel_cuda(at::TensorIteratorBase &)
+   1.1     0.290     99546       2.9  void at::native::elementwise_kernel<(int)128, (int)2, void at::native::gpu_kernel_impl_nocast<at::native::dire
+   1.0     0.256    164901       1.6  void at::native::vectorized_elementwise_kernel<(int)4, void at::native::<unnamed>::pow_tensor_scalar_kernel_im
+   1.0     0.244    125920       1.9  void at::native::vectorized_elementwise_kernel<(int)8, at::native::CUDAFunctor_add<c10::BFloat16>, std::array<
+   1.0     0.243    138864       1.8  void at::native::vectorized_elementwise_kernel<(int)8, at::native::BinaryFunctor<c10::BFloat16, c10::BFloat16,
+   0.9     0.231    112800       2.0  void at::native::vectorized_elementwise_kernel<(int)4, at::native::CUDAFunctor_add<float>, std::array<char *, 
+   0.9     0.228     75744       3.0  void at::native::reduce_kernel<(int)512, (int)1, at::native::ReduceOp<c10::BFloat16, at::native::func_wrapper_
+   0.8     0.204    138843       1.5  void at::native::vectorized_elementwise_kernel<(int)4, at::native::BinaryFunctor<float, float, float, at::nati
+   0.8     0.197    100672       2.0  void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)0,
+   0.7     0.168     24928       6.7  nvjet_tst_64x8_64x16_4x1_v_bz_splitK_TNT
+   0.7     0.166     50816       3.3  void at::native::<unnamed>::CatArrayBatchedCopy<at::native::<unnamed>::OpaqueType<(unsigned int)2>, unsigned i
+   0.7     0.165     37872       4.3  void at::native::<unnamed>::conv_depthwise2d_forward_kernel_generic<c10::BFloat16, int>(torch::headeronly::det
+
+## CUDA API (host side): total 37.06s over 5514539 instances
+ time%   total_s     count    avg_us  name
+  54.6    20.230   4089091       4.9  cudaLaunchKernel
+  30.6    11.332     79135     143.2  cudaMemcpyAsync
+   7.0     2.610    410277       6.4  cuLaunchKernelEx
+   2.6     0.967     40303      24.0  cudaStreamSynchronize
+   2.6     0.947       570    1661.2  cudaGetDeviceProperties_v2_v12000
+   1.6     0.606       488    1241.2  cudaMalloc
+   0.3     0.115     20890       5.5  cudaLaunchKernelExC_v11060
+   0.3     0.095    784266       0.1  cuKernelGetAttribute
+   0.2     0.059       332     178.5  cuLibraryLoadData
+   0.2     0.056     53410       1.0  cudaStreamIsCapturing_v10000
+   0.1     0.024      2764       8.8  cudaMemsetAsync
+   0.0     0.007     25318       0.3  cuKernelSetAttribute
+
+## GPU memcpy/memset: total 10.28s over 81899 instances
+ time%   total_s     count    avg_us  name
+  99.4    10.220     39514     258.7  [CUDA memcpy Host-to-Device]
+   0.6     0.059     38832       1.5  [CUDA memcpy Device-to-Device]
+   0.0     0.002      2764       0.7  [CUDA memset]
+   0.0     0.002       789       2.6  [CUDA memcpy Device-to-Host]

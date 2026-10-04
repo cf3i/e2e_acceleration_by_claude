@@ -13,10 +13,14 @@ from .hf_patches import set_linear_attn_fast_path
 
 class NaiveEngine:
     def __init__(self, model_path: str = MODEL_PATH, device: str = "cuda", dtype=torch.bfloat16,
-                 linear_attn_fast_path: bool = False):
+                 linear_attn_fast_path: bool = False, cudnn_sdpa: bool = True):
         self.device = device
-        self.options = {"linear_attn_fast_path": linear_attn_fast_path}
+        self.options = {"linear_attn_fast_path": linear_attn_fast_path, "cudnn_sdpa": cudnn_sdpa}
         set_linear_attn_fast_path(linear_attn_fast_path)
+        # cuDNN SDPA builds an execution plan per new (q_len, kv_len) shape: ~2.4 ms host time per call,
+        # and during decode kv_len grows every step, so nearly every step is a "new" shape.
+        # Disabling it lets SDPA dispatch to the flash / mem-efficient kernels, which need no plan.
+        torch.backends.cuda.enable_cudnn_sdp(cudnn_sdpa)
         self.tok = AutoTokenizer.from_pretrained(model_path)
         self.model = Qwen3_5ForCausalLM.from_pretrained(model_path, dtype=dtype).to(device).eval()
         self.stop_ids = {self.tok.convert_tokens_to_ids("<|im_end|>"), self.tok.convert_tokens_to_ids("<|endoftext|>")}
