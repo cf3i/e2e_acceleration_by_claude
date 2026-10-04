@@ -5,8 +5,12 @@ run_continuous -- continuous batching (phase 2; BatchEngine): up to S agents in 
                   loop iteration admits new tasks into free slots (prefill), runs ONE decode step for all slots,
                   and finishes turns whose row emitted a stop token (detokenize, tool call, next-turn prefill).
                   With forced-token prefill a turn starts without a first token; it arrives from a later step.
+continuous_async -- same, but tool calls run in a thread pool: the agent's slot is suspended (state saved) while
+                  its tool runs and the other rows keep decoding; finished tools are picked up between steps.
 """
 import collections
+import concurrent.futures as cf
+import functools
 import time
 
 from .agent import AgentState
@@ -45,8 +49,17 @@ def run_serial(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int =
     return results, turns
 
 
-def run_continuous(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6):
+def _timed_execute(call):
+    t0 = time.perf_counter()
+    result = execute(*call)
+    return result, time.perf_counter() - t0
+
+
+def run_continuous(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6,
+                   async_tools: bool = False, tool_workers: int = 8):
     tok, stop_ids = engine.tok, engine.stop_ids
+    pool = cf.ThreadPoolExecutor(tool_workers) if async_tools else None
+    pending = {}  # future -> (slot, agent state, t_task, turn record) for tools in flight
     queue, free = collections.deque(tasks), list(range(engine.num_slots))[::-1]
     engine.reset_stats()
     if getattr(engine, "prefix_reuse", False) and len(tasks) >= 2:
@@ -78,15 +91,19 @@ def run_continuous(engine, tasks, timer, max_new_tokens: int = 512, max_turns: i
         with timer("detokenize"):
             text = tok.decode(gen, skip_special_tokens=False)
         call = st.observe(text)
-        tool_s = 0.0
+        rec = {"task_id": st.task["id"], "turn": st.turns, "prompt_len": len(run["ids"]),
+               "gen_len": len(gen), "prefill_s": run["prefill_s"], "decode_s": run["decode_s"],
+               "tool_s": 0.0, "stopped": stopped}
+        turns.append(rec)
+        if call is not None and pool is not None:
+            engine.suspend(slot)
+            pending[pool.submit(_timed_execute, call)] = (slot, st, run["t_task"], rec)
+            return
         if call is not None:
             with timer("tool") as t_tool:
                 result = execute(*call)
-            tool_s = t_tool.elapsed
+            rec["tool_s"] = t_tool.elapsed
             st.add_tool_result(result)
-        turns.append({"task_id": st.task["id"], "turn": st.turns, "prompt_len": len(run["ids"]),
-                      "gen_len": len(gen), "prefill_s": run["prefill_s"], "decode_s": run["decode_s"],
-                      "tool_s": tool_s, "stopped": stopped})
         if st.done:
             engine.release(slot)
             free.append(slot)
@@ -98,10 +115,23 @@ def run_continuous(engine, tasks, timer, max_new_tokens: int = 512, max_turns: i
         else:
             start_turn(slot, st, run["t_task"])
 
-    while queue or live:
+    def collect(futures):
+        for fut in futures:
+            slot, st, t_task, rec = pending.pop(fut)
+            result, rec["tool_s"] = fut.result()
+            st.add_tool_result(result)
+            start_turn(slot, st, t_task)  # st cannot be done here: a tool call never ends the episode
+
+    while queue or live or pending:
+        if pending:
+            collect([f for f in list(pending) if f.done()])
         while free and queue:
             start_turn(free.pop(), AgentState(queue.popleft(), max_turns=max_turns), time.perf_counter())
         if not live:
+            if pending:
+                with timer("tool_wait"):
+                    done, _ = cf.wait(list(pending), return_when=cf.FIRST_COMPLETED)
+                collect(done)
             continue
         with timer("decode") as t_dec:
             out = engine.step()
@@ -114,7 +144,10 @@ def run_continuous(engine, tasks, timer, max_new_tokens: int = 512, max_turns: i
             run["gen"].append(out[slot])
             if out[slot] in stop_ids or len(run["gen"]) >= run["limit"]:
                 finish_turn(slot)
+    if pool is not None:
+        pool.shutdown()
     return results, turns
 
 
-RUNNERS = {"serial": run_serial, "continuous": run_continuous}
+RUNNERS = {"serial": run_serial, "continuous": run_continuous,
+           "continuous_async": functools.partial(run_continuous, async_tools=True)}

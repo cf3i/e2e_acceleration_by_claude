@@ -6,6 +6,8 @@ API used by the continuous runner:
     step() -> {slot: token}                one decode step for ALL slots: one CUDA-graph replay; returns the
                                            new token of every row that is generating (not consuming a suffix)
     release(slot)                          park the row (its outputs are ignored from now on)
+    suspend(slot)                          park the row but keep its state (agent waiting for a tool); the
+                                           next submit() on the slot resumes it
 
 The decode step is the phase-1 recipe (compiled forward + GQA-folded decode attention, captured in one CUDA
 graph) at batch S: row r = slot r, its own token / position / mask row, so rows can be at any length and a
@@ -24,6 +26,11 @@ of at most `force_max` tokens is instead fed through the decode graph one token 
 row's input from a forced-token buffer (filled by the host before each replay) instead of its last output, and
 the row's outputs are ignored until the last suffix token has been fed. Same state update as decoding, no
 extra call, the other rows keep decoding.
+
+Suspend (for asynchronous tools): every replay updates the Gated-DeltaNet states of ALL rows in place, parked
+or not, so a slot whose agent is waiting for a tool would have its recurrent state overwritten by garbage. KV is
+safe (a parked row writes only to the scratch position). suspend() saves the slot's conv/recurrent states and
+parks the row; resume (inside submit) copies them back and moves the row back to its real end.
 """
 import collections
 import os
@@ -74,6 +81,7 @@ class BatchEngine(NaiveEngine):
         self.live = set()
         self.force_max = force_max
         self.force_q = [collections.deque() for _ in range(S)]  # suffix tokens still to feed into slot s
+        self.suspended = {}  # slot -> saved linear-attention states while its agent waits for a tool
         self.shared = None             # (tokens, snapshot) of the shared prefix
         self.reset_stats()
         t0 = time.perf_counter()
@@ -156,6 +164,8 @@ class BatchEngine(NaiveEngine):
     def submit(self, slot: int, input_ids: list[int]):
         """Start a turn on `slot`. Returns the first generated token (eager prefill) or None (the suffix is
         queued as forced tokens; the first generated token comes out of a later step())."""
+        if slot in self.suspended:
+            self._resume(slot)
         if not self.force_max:
             return self.prefill(slot, input_ids)
         n = len(input_ids)
@@ -182,7 +192,26 @@ class BatchEngine(NaiveEngine):
         self.live.add(slot)
         return None
 
+    @torch.inference_mode()
+    def suspend(self, slot: int):
+        """Take a slot out of decoding while keeping its state (its tokens / KV stay, its row is parked)."""
+        assert not self.force_q[slot], "cannot suspend while consuming a suffix"
+        self.suspended[slot] = [(l.conv_states[slot].clone(), l.recurrent_states[slot].clone())
+                                if l is not None else None for l in self.cache.layers]
+        self.pos_buf[slot] = self.park
+        self.live.discard(slot)
+
+    def _resume(self, slot: int):
+        for l, saved in zip(self.cache.layers, self.suspended.pop(slot)):
+            if saved is not None:
+                l.conv_states[slot].copy_(saved[0])
+                l.recurrent_states[slot].copy_(saved[1])
+        self.mask_buf[slot, ..., self.park] = False  # the parked steps marked the scratch position
+        self.pos_buf[slot] = len(self.slot_tokens[slot])
+        self.live.add(slot)
+
     def release(self, slot: int):
+        self.suspended.pop(slot, None)
         self.force_q[slot].clear()
         self.mask_buf[slot].zero_()
         self.pos_buf[slot] = self.park

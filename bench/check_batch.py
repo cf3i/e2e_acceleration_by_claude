@@ -9,7 +9,10 @@ float differences from processing the prompt in two chunks):
   shared: fresh prefill on top of the restored shared-prefix snapshot;
   extend: prefill ids[:-17] first, then the full prompt extends the slot by 17 tokens.
 With forced-token prefill (`force_max`) both reuse paths feed the suffix through the decode graph instead, and
-the alone / concurrent runs start turns with `submit` (so forced rows mix with generating rows).
+the alone / concurrent runs start turns with `submit` (so forced rows mix with generating rows), and in the
+concurrent run every odd prompt is suspended for 7 steps after 10 tokens and resumed by submitting its tokens +
+the pending token (a 1-token forced suffix) -- exactly what an uninterrupted decode would feed, so the output
+must stay bit-identical if suspend/resume preserves the state.
 
     python bench/check_batch.py --stage p2_s01_continuous_batching --engine p2_s01
 """
@@ -96,8 +99,14 @@ def main():
     S = engine.num_slots
     pending = list(enumerate(prompts))
     live, outs, step = {}, [None] * len(prompts), 0
+    asleep = {}  # slot -> (wake step, i, gen)
     t0 = time.perf_counter()
-    while pending or live:
+    while pending or live or asleep:
+        for slot, (wake, i, gen) in list(asleep.items()):
+            if step >= wake:
+                del asleep[slot]
+                assert engine.submit(slot, engine.slot_tokens[slot] + [gen[-1]]) is None
+                live[slot] = (i, gen)
         while pending and pending[0][0] * args.stagger <= step:
             i, ids = pending.pop(0)
             first = engine.submit(S - 1 - i, ids)
@@ -112,6 +121,10 @@ def main():
                 if gen[-1] in engine.stop_ids or len(gen) >= args.max_new_tokens:
                     outs[i] = gen[:-1] if gen[-1] in engine.stop_ids else gen
                     engine.release(slot)
+                    del live[slot]
+                elif forced and i % 2 == 1 and len(gen) == 10:
+                    engine.suspend(slot)
+                    asleep[slot] = (step + 7, i, gen)
                     del live[slot]
         step += 1
     conc_s = time.perf_counter() - t0
