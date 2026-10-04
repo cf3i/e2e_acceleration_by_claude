@@ -4,3 +4,4 @@ slurm/logs/
 *.nsys-rep
 *.sqlite
 results/**/torch_trace*.json
+runs/

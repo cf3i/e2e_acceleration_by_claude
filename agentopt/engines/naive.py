@@ -8,11 +8,15 @@ import torch
 from transformers import AutoTokenizer, Qwen3_5ForCausalLM
 
 from .. import MODEL_PATH
+from .hf_patches import set_linear_attn_fast_path
 
 
 class NaiveEngine:
-    def __init__(self, model_path: str = MODEL_PATH, device: str = "cuda", dtype=torch.bfloat16):
+    def __init__(self, model_path: str = MODEL_PATH, device: str = "cuda", dtype=torch.bfloat16,
+                 linear_attn_fast_path: bool = False):
         self.device = device
+        self.options = {"linear_attn_fast_path": linear_attn_fast_path}
+        set_linear_attn_fast_path(linear_attn_fast_path)
         self.tok = AutoTokenizer.from_pretrained(model_path)
         self.model = Qwen3_5ForCausalLM.from_pretrained(model_path, dtype=dtype).to(device).eval()
         self.stop_ids = {self.tok.convert_tokens_to_ids("<|im_end|>"), self.tok.convert_tokens_to_ids("<|endoftext|>")}

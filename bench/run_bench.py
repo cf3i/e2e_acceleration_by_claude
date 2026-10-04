@@ -70,14 +70,17 @@ def env_info():
             return subprocess.run(cmd, shell=True, capture_output=True, text=True, cwd=ROOT).stdout.strip()
         except Exception as e:  # noqa: BLE001
             return str(e)
+    rev_file = ROOT / "REVISION"  # written by slurm/submit.sh into code snapshots
+    git_commit = rev_file.read_text().strip() if rev_file.exists() else sh("git rev-parse HEAD")
     return {
         "host": os.uname().nodename,
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "gpu": torch.cuda.get_device_name() if torch.cuda.is_available() else None,
         "torch": torch.__version__,
         "transformers": __import__("transformers").__version__,
-        "git_commit": sh("git rev-parse HEAD"),
-        "git_dirty": bool(sh("git status --porcelain -- agentopt bench")),
+        "git_commit": git_commit,
+        "snapshot": rev_file.exists(),
+        "git_dirty": False if rev_file.exists() else bool(sh("git status --porcelain -- agentopt bench")),
         "argv": sys.argv,
     }
 
@@ -123,7 +126,8 @@ def main():
     med_idx = sorted(range(len(reps)), key=lambda i: reps[i][0]["makespan_s"])[len(reps) // 2]
     m, results, turns = reps[med_idx]
     metrics = {
-        "stage": args.stage, "engine": args.engine, "runner": args.runner,
+        "stage": args.stage, "engine": args.engine, "engine_options": getattr(engine, "options", {}),
+        "runner": args.runner,
         "config": {k: v for k, v in vars(args).items() if k not in ("stage", "out")},
         "load_s": load_s,
         "makespan_s_all": [x[0]["makespan_s"] for x in reps],
