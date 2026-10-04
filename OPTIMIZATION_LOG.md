@@ -147,3 +147,9 @@ attention rewrite (1.19×), cuDNN-SDPA off (cold cliff), fla kernels (prefill 3.
 Order of impact: continuous batching (7.8×), forced-token prefill (1.30×), FP8 (1.25×), async tools (1.21×),
 bucket graphs + 64 slots (1.15×), state launch/bf16 (1.15×), in-place state (1.08×). Prefix reuse alone gave
 0× (it enabled forced prefill). The run is now bound by its longest agent: ~1000 steps × 15–23 ms.
+
+## Reference: vLLM 0.30 (same workload; `results/ref_vllm_fp8/README.md`)
+- 3 repeats each. fp8: ours (p2_s10) 20.3 s median vs vLLM 20.6 s. bf16: ours (p2_s10_bf16) 28.2 s vs vLLM 28.9 s.
+- Both are bound by task 423's chain. With the same 751-token chain, ours costs 26.5 vs 27.4 ms per chain token.
+- vLLM admits all 128 agents, so its task p50 is 10.4 s vs ours 5.8 s (64 slots).
+- vLLM loads faster: 223 s vs 580 s. Final write-up: `results/FINAL_REPORT.md`.

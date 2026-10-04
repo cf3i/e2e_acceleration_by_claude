@@ -1,0 +1,76 @@
+{
+  "stage": "ref_vllm_bf16",
+  "engine": "vllm",
+  "engine_options": {
+    "model": "/mnt/data/u/feic/pjs/model/Qwen3.5-27B",
+    "dtype": "bfloat16",
+    "max_model_len": 8192,
+    "gpu_memory_utilization": 0.92,
+    "enable_prefix_caching": true,
+    "max_num_seqs": 128,
+    "limit_mm_per_prompt": {
+      "image": 0,
+      "video": 0
+    },
+    "quantization": null,
+    "seed": 0,
+    "vllm": "0.30.0"
+  },
+  "runner": "vllm_async",
+  "config": {
+    "num_tasks": 128,
+    "repeats": 3,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "max_model_len": 8192,
+    "max_num_seqs": 128,
+    "gpu_mem": 0.92,
+    "quantization": null,
+    "prefix_caching": true
+  },
+  "load_s": 123.48732342757285,
+  "makespan_s_all": [
+    29.09233083948493,
+    28.808462204411626,
+    28.867915676906705
+  ],
+  "makespan_s": 28.867915676906705,
+  "tasks": 128,
+  "accuracy": 0.9375,
+  "tasks_per_min": 266.0392972584344,
+  "turns": 255,
+  "tool_calls": 127,
+  "gen_tokens": 20267,
+  "prompt_tokens": 126766,
+  "redundant_prefill_tokens": 69496,
+  "gen_tok_per_s_e2e": 702.0596923875897,
+  "decode_ms_per_token": 63.302324309851286,
+  "prefill_tok_per_s": 278.3442045578039,
+  "task_latency_p50_s": 13.47467596642673,
+  "task_latency_p90_s": 17.65301174670458,
+  "finish_reasons": {
+    "answer": 125,
+    "no_answer": 3
+  },
+  "agent_seconds": {
+    "prefill": 455.4289183113724,
+    "decode": 1266.806114088744,
+    "tool": 14.39514259621501
+  },
+  "peak_mem_gb": null,
+  "env": {
+    "host": "orix-worker-h100-7",
+    "slurm_job_id": "297397",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.13.0+cu129",
+    "transformers": "5.18.0",
+    "git_commit": "9b96bea3f63f051f31dd895d822b0155b56a64f7",
+    "snapshot": true,
+    "git_dirty": false,
+    "argv": [
+      "bench/run_vllm.py",
+      "--stage",
+      "ref_vllm_bf16"
+    ]
+  }
+}

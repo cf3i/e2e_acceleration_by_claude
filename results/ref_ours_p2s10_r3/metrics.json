@@ -1,0 +1,92 @@
+{
+  "stage": "ref_ours_p2s10_r3",
+  "engine": "p2_s10",
+  "engine_options": {
+    "linear_attn_fast_path": true,
+    "cudnn_sdpa": false,
+    "num_slots": 64,
+    "max_len": 2048,
+    "compile_decode": true,
+    "gqa_decode_attn": true,
+    "prefix_reuse": true,
+    "force_max": 512,
+    "inplace_state": true,
+    "fp8": "tensor",
+    "buckets": [
+      8,
+      16,
+      24,
+      32,
+      48
+    ],
+    "state_dtype": "bf16",
+    "recurrent_launch": "tuned"
+  },
+  "runner": "continuous_async",
+  "config": {
+    "engine": "p2_s10",
+    "runner": "continuous_async",
+    "num_tasks": 128,
+    "repeats": 3,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "device": "cuda"
+  },
+  "load_s": 579.7392613384873,
+  "makespan_s_all": [
+    18.589276345446706,
+    20.359710603952408,
+    20.28977931663394
+  ],
+  "makespan_s": 20.28977931663394,
+  "tasks": 128,
+  "accuracy": 0.9296875,
+  "tasks_per_min": 378.51569897085045,
+  "turns": 254,
+  "tool_calls": 126,
+  "gen_tokens": 20864,
+  "prompt_tokens": 125662,
+  "redundant_prefill_tokens": 68424,
+  "gen_tok_per_s_e2e": 1028.3009822041438,
+  "decode_ms_per_token": 0.9199960292838893,
+  "prefill_tok_per_s": 366668.09268519294,
+  "task_latency_p50_s": 5.8467390686273575,
+  "task_latency_p90_s": 9.553152499720454,
+  "finish_reasons": {
+    "no_answer": 4,
+    "answer": 124
+  },
+  "engine_stats": {
+    "prefill_calls": 1,
+    "prefill_tokens": 352,
+    "reused_turn": 67205,
+    "reused_shared": 45760,
+    "forced_tokens": 12697,
+    "decode_steps": 948,
+    "live_row_steps": 33558,
+    "computed_row_steps": 37120,
+    "row_swaps": 405
+  },
+  "peak_mem_gb": 51.23694467544556,
+  "env": {
+    "host": "orix-worker-h100-7",
+    "slurm_job_id": "297408",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.5.4",
+    "git_commit": "cfc5a6c8ff8fdf1c0301f14797ea5842b2268835",
+    "snapshot": true,
+    "git_dirty": false,
+    "argv": [
+      "bench/run_bench.py",
+      "--stage",
+      "ref_ours_p2s10_r3",
+      "--engine",
+      "p2_s10",
+      "--runner",
+      "continuous_async",
+      "--repeats",
+      "3"
+    ]
+  }
+}
