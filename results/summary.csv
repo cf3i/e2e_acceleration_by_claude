@@ -1,0 +1,8 @@
+stage,phase,makespan_s,accuracy,gen_tok_per_s_e2e,e2e_decode_ms_per_tok,micro_decode_ms_warm_1024,micro_decode_ms_cold_1024,micro_prefill_ms_warm_1024,roofline_frac_1024,gpu_busy_ratio,kernels_per_token,e2e_speedup,micro_decode_speedup
+p1_s01_no_cudnn_sdpa,p1,,,,,59.87,59.4,412.3,0.268,0.301,5905.6,,1.05
+p1_s02_fla_fastpath,p1,,,,,59.03,58.66,109.8,0.272,0.292,3541.0,,1.07
+p1_s03_static_cache,p1,,,,,65.37,65.17,123.0,0.246,,,,0.96
+p1_s04_cuda_graph,p1,660.8,0.9375,31.1,30.62,31.51,31.5,125.0,0.51,0.82,3658.1,2.53,2.0
+p1_s05_async_readback,p1,,,,,31.1,31.09,124.7,0.516,,,,2.03
+p1_s06_compile,p1,,,,,,,,,,,,
+stage00_baseline,-,1673.6,0.9297,12.3,71.84,63.02,438.03,445.1,0.255,0.214,5918.1,1.0,1.0
