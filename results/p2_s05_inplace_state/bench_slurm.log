@@ -1,0 +1,70 @@
+Failed to load /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_cutlass_90a.abi3.so: Could not load this library: /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_cutlass_90a.abi3.so
+Failed to load /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_mxfp8.cpython-310-x86_64-linux-gnu.so: Could not load this library: /mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/.venv/lib/python3.13/site-packages/torchao/_C_mxfp8.cpython-310-x86_64-linux-gnu.so
+Loading weights:   0%|          | 0/851 [00:00<?, ?it/s]Loading weights:   7%|▋         | 60/851 [00:00<00:01, 511.95it/s]Loading weights:  13%|█▎        | 112/851 [00:00<00:02, 366.04it/s]Loading weights:  18%|█▊        | 151/851 [00:00<00:02, 334.64it/s]Loading weights:  22%|██▏       | 186/851 [00:00<00:02, 326.07it/s]Loading weights:  27%|██▋       | 227/851 [00:00<00:01, 329.10it/s]Loading weights:  31%|███       | 264/851 [00:00<00:01, 321.16it/s]Loading weights:  35%|███▍      | 297/851 [00:00<00:01, 320.76it/s]Loading weights:  39%|███▉      | 336/851 [00:00<00:01, 338.21it/s]Loading weights:  44%|████▎     | 371/851 [00:01<00:01, 327.67it/s]Loading weights:  47%|████▋     | 404/851 [00:01<00:01, 300.15it/s]Loading weights:  51%|█████     | 435/851 [00:01<00:01, 299.96it/s]Loading weights:  55%|█████▍    | 466/851 [00:01<00:01, 261.16it/s]Loading weights:  61%|██████    | 520/851 [00:01<00:01, 329.53it/s]Loading weights:  66%|██████▌   | 560/851 [00:01<00:00, 338.17it/s]Loading weights:  71%|███████   | 604/851 [00:01<00:00, 365.38it/s]Loading weights:  75%|███████▌  | 642/851 [00:01<00:00, 337.23it/s]Loading weights:  80%|███████▉  | 678/851 [00:02<00:00, 300.10it/s]Loading weights:  83%|████████▎ | 710/851 [00:02<00:00, 303.17it/s]Loading weights:  88%|████████▊ | 753/851 [00:02<00:00, 334.85it/s]Loading weights:  93%|█████████▎| 788/851 [00:02<00:00, 325.74it/s]Loading weights:  97%|█████████▋| 822/851 [00:02<00:00, 318.99it/s]Loading weights: 100%|██████████| 851/851 [00:02<00:00, 330.95it/s]
+batch decode graph (S=32) captured in 30.1s, cache 8.6 GiB
+engine loaded in 75.3s
+[rep 0] makespan=35.7s acc=0.938 gen_tok=20265 decode=1.70ms/tok
+{
+  "stage": "p2_s05_inplace_state",
+  "engine": "p2_s05",
+  "engine_options": {
+    "linear_attn_fast_path": true,
+    "cudnn_sdpa": false,
+    "num_slots": 32,
+    "max_len": 2048,
+    "compile_decode": true,
+    "gqa_decode_attn": true,
+    "prefix_reuse": true,
+    "force_max": 128,
+    "inplace_state": true,
+    "fp8": false
+  },
+  "runner": "continuous_async",
+  "config": {
+    "engine": "p2_s05",
+    "runner": "continuous_async",
+    "num_tasks": 128,
+    "repeats": 1,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "device": "cuda"
+  },
+  "load_s": 75.28041901253164,
+  "makespan_s_all": [
+    35.7076068315655
+  ],
+  "makespan_s": 35.7076068315655,
+  "tasks": 128,
+  "accuracy": 0.9375,
+  "tasks_per_min": 215.08022187616575,
+  "turns": 255,
+  "tool_calls": 127,
+  "gen_tokens": 20265,
+  "prompt_tokens": 126891,
+  "redundant_prefill_tokens": 69572,
+  "gen_tok_per_s_e2e": 567.5261323333983,
+  "decode_ms_per_token": 1.6969665379516188,
+  "prefill_tok_per_s": 121236.68093249916,
+  "task_latency_p50_s": 6.6571250688284636,
+  "task_latency_p90_s": 10.88125305250287,
+  "finish_reasons": {
+    "no_answer": 3,
+    "answer": 125
+  },
+  "engine_stats": {
+    "prefill_calls": 7,
+    "prefill_tokens": 1700,
+    "reused_turn": 67225,
+    "reused_shared": 46464,
+    "forced_tokens": 11854,
+    "decode_steps": 1243,
+    "live_row_steps": 32117
+  },
+  "peak_mem_gb": 59.40941572189331
+}
+breakdown (median rep):
+  decode           33.96s   95.1%  n=1243
+  prefill           1.17s    3.3%  n=256
+  template          0.36s    1.0%  n=255
+  other             0.20s    0.6%  n=0
+  detokenize        0.03s    0.1%  n=255
