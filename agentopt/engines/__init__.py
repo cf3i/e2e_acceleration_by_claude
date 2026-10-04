@@ -7,6 +7,8 @@ PRESETS = {
     "p1_s02": ("naive", _S02),                                 # + fla / causal-conv1d kernels for Gated-DeltaNet
     "p1_s03": ("static", _S02),                                # + preallocated StaticCache, in-place decode buffers
     "p1_s04": ("static", {**_S02, "cuda_graph": True}),        # + CUDA-graph-captured decode step
+    "p1_s05": ("static", {**_S02, "cuda_graph": True,          # + overlap graph launch with the previous step
+                          "async_readback": True}),
 }
 
 

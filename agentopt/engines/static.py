@@ -12,6 +12,11 @@ step itself extends by one position. Prefill (q_len = n < max_cache_len) gets a 
 CUDA graph: one decode step = model forward + argmax + "feed the token back" + "advance the position", all
 recorded once and replayed per token, so the ~thousands of kernel launches and all Python/HF dispatch for the
 64 layers become one `graph.replay()`. The host still reads the token each step for the stop check.
+
+Async readback (optional): replaying a ~3.6k-node graph costs milliseconds of CPU, and with a blocking read per
+token that CPU time is not overlapped with GPU work. With `async_readback` the engine enqueues step k+1 before
+waiting for token k (copied to pinned host memory + event), so launch overlaps execution. When token k is a stop
+token, the already-queued step k+1 is simply discarded (the next request starts with a fresh prefill).
 """
 import torch
 from transformers import StaticCache
@@ -20,9 +25,14 @@ from .naive import NaiveEngine
 
 
 class StaticEngine(NaiveEngine):
-    def __init__(self, max_cache_len: int = 4096, cuda_graph: bool = False, **kw):
+    def __init__(self, max_cache_len: int = 4096, cuda_graph: bool = False, async_readback: bool = False, **kw):
         super().__init__(**kw)
-        self.options.update(static_cache=True, max_cache_len=max_cache_len, cuda_graph=cuda_graph)
+        assert cuda_graph or not async_readback, "async_readback requires cuda_graph"
+        self.options.update(static_cache=True, max_cache_len=max_cache_len, cuda_graph=cuda_graph,
+                            async_readback=async_readback)
+        self.async_readback = async_readback
+        self.host_buf = torch.zeros((2,), dtype=torch.long, pin_memory=True)  # double-buffered token readback
+        self.events = [torch.cuda.Event(), torch.cuda.Event()]
         self.max_cache_len = max_cache_len
         self.cache = StaticCache(config=self.model.config, max_cache_len=max_cache_len)
         # Static decode-step buffers: current token, its position, and the produced next token.
@@ -73,6 +83,26 @@ class StaticEngine(NaiveEngine):
         self.pos_buf.fill_(n)
         return int(next_id)
 
+    def _launch(self, i: int):
+        self.graph.replay()
+        self.host_buf[i % 2].copy_(self.next_buf[0], non_blocking=True)
+        self.events[i % 2].record()
+
+    def _decode_pipelined(self, gen: list[int], stop_ids, max_new_tokens: int):
+        if gen[-1] in stop_ids or len(gen) >= max_new_tokens:
+            return
+        i = 0
+        self._launch(0)
+        while True:
+            if len(gen) + 1 < max_new_tokens:
+                self._launch(i + 1)  # speculative: queue the next step before reading this one
+            self.events[i % 2].synchronize()
+            tok = int(self.host_buf[i % 2])
+            gen.append(tok)
+            i += 1
+            if tok in stop_ids or len(gen) >= max_new_tokens:
+                return
+
     @torch.inference_mode()
     def generate(self, input_ids: list[int], max_new_tokens: int, timer, ignore_eos: bool = False):
         assert len(input_ids) + max_new_tokens <= self.max_cache_len, "context exceeds max_cache_len"
@@ -81,6 +111,9 @@ class StaticEngine(NaiveEngine):
             next_id = self._prefill(input_ids)
         gen = [next_id]
         with timer("decode") as t_dec:
+            if self.async_readback:
+                self._decode_pipelined(gen, stop_ids, max_new_tokens)
+                next_id = gen[-1]
             while next_id not in stop_ids and len(gen) < max_new_tokens:
                 if self.graph is not None:
                     self.graph.replay()
