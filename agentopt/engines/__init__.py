@@ -14,6 +14,11 @@ PRESETS = {
     "p1_s07": ("static", {**_S02, "cuda_graph": True,          # + GQA-folded GEMM attention for decode
                           "async_readback": True, "compile_decode": True, "gqa_decode_attn": True}),
 }
+# Phase 2 (continuous batching): "batch" engines are driven by the `continuous` runner.
+_P1 = {**_S02, "compile_decode": True, "gqa_decode_attn": True}
+PRESETS.update({
+    "p2_s01": ("batch", {**_P1, "num_slots": 32}),                # continuous batching, 32 slots
+})
 
 
 def make_engine(name: str, **kw):
@@ -22,6 +27,8 @@ def make_engine(name: str, **kw):
     cls, opts = PRESETS[name]
     if cls == "naive":
         from .naive import NaiveEngine as Engine
+    elif cls == "batch":
+        from .batch import BatchEngine as Engine
     else:
         from .static import StaticEngine as Engine
     return Engine(**{**opts, **kw})

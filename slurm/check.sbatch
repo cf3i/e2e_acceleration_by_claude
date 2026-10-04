@@ -1,5 +1,6 @@
 #!/bin/bash
 # Correctness check of engine presets. Usage: slurm/submit.sh check <STAGE> --ref A --cand B,C
+#   CHECK=check_batch slurm/submit.sh check <STAGE> --engine P   (slot-isolation check for batch engines)
 #SBATCH --job-name=agentopt-check
 #SBATCH --partition=freecycle-h100
 #SBATCH --qos=freecycle
@@ -19,5 +20,5 @@ mkdir -p "$OUT"
 slurm/gpumon.sh "$OUT/gpumon_check.csv" &
 GPUMON=$!
 trap "kill $GPUMON 2>/dev/null" EXIT
-python bench/check_equiv.py --stage "$STAGE" ${ARGS:-}
-cp "slurm/logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out" "$OUT/check_slurm.log"
+python bench/${CHECK:-check_equiv}.py --stage "$STAGE" ${ARGS:-}
+cp "slurm/logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out" "$OUT/${CHECK:-check}_slurm.log"
