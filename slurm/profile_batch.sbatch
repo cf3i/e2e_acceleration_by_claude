@@ -1,6 +1,6 @@
 #!/bin/bash
 # Steady-state batched decode step: timing + node-level nsys of a few graph replays.
-# Usage: slurm/submit.sh profile_batch <STAGE> --engine P
+# Usage: slurm/submit.sh profile_batch <STAGE> --engine P [--live N --tag _bN]  (nsys goes to profile<tag>/)
 #SBATCH --job-name=agentopt-profile-batch
 #SBATCH --partition=freecycle-h100
 #SBATCH --qos=freecycle
@@ -14,7 +14,8 @@ set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 source .venv/bin/activate
 : "${STAGE:?set STAGE}"
-P=results/$STAGE/profile
+TAG=$(echo "${ARGS:-}" | sed -n 's/.*--tag \([^ ]*\).*/\1/p')
+P=results/$STAGE/profile$TAG
 mkdir -p "$P"
 (hostname; uptime; nvidia-smi) > "$P/node.txt"
 nsys profile -t cuda,nvtx --cuda-graph-trace=node --capture-range=cudaProfilerApi --capture-range-end=stop \

@@ -179,6 +179,7 @@ class BatchEngine(NaiveEngine):
         self.stats = {"prefill_calls": 0, "prefill_tokens": 0, "reused_turn": 0, "reused_shared": 0,
                       "forced_tokens": 0,
                       "decode_steps": 0, "live_row_steps": 0, "computed_row_steps": 0, "row_swaps": 0}
+        self.trace = []  # per step: (t before replay, t after the token readback, bucket, live rows, forcing rows)
 
     @staticmethod
     def _is_prefix(p, ids):
@@ -289,6 +290,7 @@ class BatchEngine(NaiveEngine):
 
     @torch.inference_mode()
     def step(self) -> dict[int, int]:
+        t0 = time.perf_counter()
         B = next(b for b in self.buckets if b >= len(self.live))
         forcing = [s for s in self.live if self.force_q[s]]
         if forcing or self.force_host[1].any():
@@ -302,6 +304,7 @@ class BatchEngine(NaiveEngine):
         self.event.record()
         self.event.synchronize()
         out = self.host_buf.tolist()
+        self.trace.append((t0, time.perf_counter(), B, len(self.live), len(forcing)))
         self.stats["decode_steps"] += 1
         self.stats["live_row_steps"] += len(self.live)
         self.stats["computed_row_steps"] += B

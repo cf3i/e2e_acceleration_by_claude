@@ -21,9 +21,9 @@ from agentopt.runner import RUNNERS  # noqa: E402
 from agentopt.timing import Timer  # noqa: E402
 
 
-def load_tasks(n):
+def load_tasks(n, exclude=()):
     with open(ROOT / "data/gsm8k_128.jsonl") as f:
-        return [json.loads(line) for line in f][:n]
+        return [t for t in map(json.loads, f) if t["id"] not in exclude][:n]
 
 
 def pct(xs, q):
@@ -91,6 +91,7 @@ def main():
     ap.add_argument("--engine", default="naive")
     ap.add_argument("--runner", default="serial")
     ap.add_argument("--num-tasks", type=int, default=128)
+    ap.add_argument("--exclude-tasks", type=int, nargs="*", default=[], help="task ids to drop from the workload")
     ap.add_argument("--repeats", type=int, default=1)
     ap.add_argument("--max-new-tokens", type=int, default=512)
     ap.add_argument("--max-turns", type=int, default=6)
@@ -100,7 +101,7 @@ def main():
 
     out = Path(args.out or ROOT / "results" / args.stage)
     out.mkdir(parents=True, exist_ok=True)
-    tasks = load_tasks(args.num_tasks)
+    tasks = load_tasks(args.num_tasks, set(args.exclude_tasks))
     runner = RUNNERS[args.runner]
 
     t0 = time.perf_counter()
@@ -121,6 +122,7 @@ def main():
         m["breakdown"] = timer.breakdown(makespan)
         if hasattr(engine, "stats"):
             m["engine_stats"] = dict(engine.stats)
+        m["trace"] = [(a - t0, b - t0, *rest) for a, b, *rest in getattr(engine, "trace", [])]
         reps.append((m, results, turns))
         print(f"[rep {r}] makespan={makespan:.1f}s acc={m['accuracy']:.3f} "
               f"gen_tok={m['gen_tokens']} decode={m['decode_ms_per_token']:.2f}ms/tok", flush=True)
@@ -133,7 +135,7 @@ def main():
         "config": {k: v for k, v in vars(args).items() if k not in ("stage", "out")},
         "load_s": load_s,
         "makespan_s_all": [x[0]["makespan_s"] for x in reps],
-        **{k: v for k, v in m.items() if k != "breakdown"},
+        **{k: v for k, v in m.items() if k not in ("breakdown", "trace")},
         "peak_mem_gb": torch.cuda.max_memory_allocated() / 2**30 if torch.cuda.is_available() else None,
         "env": env_info(),
     }
@@ -142,6 +144,10 @@ def main():
     with open(out / "turns.jsonl", "w") as f:
         for t in turns:
             f.write(json.dumps(t) + "\n")
+    if m["trace"]:  # median rep's decode steps, times relative to the start of the run
+        with open(out / "steps.jsonl", "w") as f:
+            for t in m["trace"]:
+                f.write(json.dumps(dict(zip(("t0", "t1", "bucket", "live", "forcing"), t))) + "\n")
     with open(out / "transcripts.jsonl", "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
