@@ -13,11 +13,18 @@ CUDA graph: one decode step = model forward + argmax + "feed the token back" + "
 recorded once and replayed per token, so the ~thousands of kernel launches and all Python/HF dispatch for the
 64 layers become one `graph.replay()`. The host still reads the token each step for the stop check.
 
+torch.compile (optional): the decode forward is compiled with inductor (no inductor cudagraphs; we capture our
+own graph around it) to fuse the thousands of tiny elementwise kernels (RMSNorm casts, rotary, SiLU*mul,
+residual adds, copies) per step. Ops dynamo cannot trace (causal-conv1d C++ op, fla Triton autograd functions)
+become graph breaks; that only limits fusion, the whole step is still one CUDA graph.
+
 Async readback (optional): replaying a ~3.6k-node graph costs milliseconds of CPU, and with a blocking read per
 token that CPU time is not overlapped with GPU work. With `async_readback` the engine enqueues step k+1 before
 waiting for token k (copied to pinned host memory + event), so launch overlaps execution. When token k is a stop
 token, the already-queued step k+1 is simply discarded (the next request starts with a fresh prefill).
 """
+import time
+
 import torch
 from transformers import StaticCache
 
@@ -25,11 +32,19 @@ from .naive import NaiveEngine
 
 
 class StaticEngine(NaiveEngine):
-    def __init__(self, max_cache_len: int = 4096, cuda_graph: bool = False, async_readback: bool = False, **kw):
+    def __init__(self, max_cache_len: int = 4096, cuda_graph: bool = False, async_readback: bool = False,
+                 compile_decode: bool = False, **kw):
         super().__init__(**kw)
         assert cuda_graph or not async_readback, "async_readback requires cuda_graph"
         self.options.update(static_cache=True, max_cache_len=max_cache_len, cuda_graph=cuda_graph,
-                            async_readback=async_readback)
+                            async_readback=async_readback, compile_decode=compile_decode)
+        self.decode_model = self.model
+        if compile_decode:
+            # 64 layers x graph breaks -> many (code object, guard) entries; the default limit (8) would
+            # silently fall back to eager for most layers.
+            torch._dynamo.config.cache_size_limit = 1024
+            torch._dynamo.config.accumulated_cache_size_limit = 4096
+            self.decode_model = torch.compile(self.model, dynamic=False, fullgraph=False)
         self.async_readback = async_readback
         self.host_buf = torch.zeros((2,), dtype=torch.long, pin_memory=True)  # double-buffered token readback
         self.events = [torch.cuda.Event(), torch.cuda.Event()]
@@ -42,14 +57,16 @@ class StaticEngine(NaiveEngine):
         self.mask_buf = torch.zeros((1, 1, 1, max_cache_len), dtype=torch.bool, device=self.device)
         self.graph = None
         if cuda_graph:
+            t0 = time.perf_counter()
             self._capture()
+            print(f"decode graph captured in {time.perf_counter() - t0:.1f}s (compile={compile_decode})", flush=True)
 
     def _step(self):
         """One decode step on the static buffers; leaves tok_buf/pos_buf/mask_buf ready for the next step.
         (The model takes positions from the cache's device-side length; pos_buf mirrors it for the mask.)"""
         self.mask_buf.index_fill_(-1, self.pos_buf, True)
-        out = self.model(input_ids=self.tok_buf, attention_mask=self.mask_buf, past_key_values=self.cache,
-                         use_cache=True)
+        out = self.decode_model(input_ids=self.tok_buf, attention_mask=self.mask_buf, past_key_values=self.cache,
+                                use_cache=True)
         self.next_buf.copy_(out.logits[0, -1].argmax().view(1))
         self.tok_buf.copy_(self.next_buf.view(1, 1))
         self.pos_buf.add_(1)
@@ -62,7 +79,7 @@ class StaticEngine(NaiveEngine):
         s = torch.cuda.Stream()
         s.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(s):
-            for _ in range(3):
+            for _ in range(3):  # also triggers torch.compile when enabled
                 self._step()
         torch.cuda.current_stream().wait_stream(s)
         self.graph = torch.cuda.CUDAGraph()

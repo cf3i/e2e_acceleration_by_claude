@@ -9,6 +9,8 @@ PRESETS = {
     "p1_s04": ("static", {**_S02, "cuda_graph": True}),        # + CUDA-graph-captured decode step
     "p1_s05": ("static", {**_S02, "cuda_graph": True,          # + overlap graph launch with the previous step
                           "async_readback": True}),
+    "p1_s06": ("static", {**_S02, "cuda_graph": True,          # + torch.compile (inductor) the decode forward
+                          "async_readback": True, "compile_decode": True}),
 }
 
 

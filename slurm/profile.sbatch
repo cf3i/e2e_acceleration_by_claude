@@ -29,7 +29,8 @@ python bench/profile_torch.py --stage "$STAGE" --tasks "$TORCH_TASKS" ${ARGS:-}
 echo "== nsys"
 nsys profile -t cuda,nvtx,osrt --cuda-graph-trace=node --sample=none --cpuctxsw=none --force-overwrite=true -o "$P/nsys" \
   python bench/run_bench.py --stage "$STAGE" --num-tasks "$NSYS_TASKS" --out "$P/nsys_run" ${ARGS:-}
-nsys stats --force-export=true --format csv --output "$P/nsys" \
+rm -f "$P"/nsys_*.csv
+nsys stats --force-export=true --force-overwrite=true --format csv --output "$P/nsys" \
   --report cuda_gpu_kern_sum,nvtx_sum,cuda_api_sum,cuda_gpu_mem_time_sum "$P/nsys.nsys-rep" > /dev/null
 python bench/analyze_nsys.py "$P" | tee "$P/nsys_summary.txt"
 cp "slurm/logs/${SLURM_JOB_NAME}-${SLURM_JOB_ID}.out" "$P/profile_slurm.log"

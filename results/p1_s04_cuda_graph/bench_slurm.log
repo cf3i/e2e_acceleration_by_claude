@@ -1,0 +1,54 @@
+Loading weights:   0%|          | 0/851 [00:00<?, ?it/s]Loading weights:   9%|▉         | 76/851 [00:00<00:01, 581.66it/s]Loading weights:  16%|█▌        | 135/851 [00:00<00:02, 285.73it/s]Loading weights:  20%|██        | 171/851 [00:00<00:02, 263.16it/s]Loading weights:  24%|██▎       | 201/851 [00:00<00:02, 241.29it/s]Loading weights:  27%|██▋       | 227/851 [00:00<00:02, 218.73it/s]Loading weights:  29%|██▉       | 251/851 [00:01<00:02, 220.01it/s]Loading weights:  32%|███▏      | 276/851 [00:01<00:02, 214.32it/s]Loading weights:  35%|███▌      | 299/851 [00:01<00:02, 215.06it/s]Loading weights:  38%|███▊      | 321/851 [00:01<00:02, 199.67it/s]Loading weights:  40%|████      | 343/851 [00:01<00:02, 204.20it/s]Loading weights:  44%|████▎     | 372/851 [00:01<00:02, 200.18it/s]Loading weights:  47%|████▋     | 397/851 [00:01<00:02, 195.19it/s]Loading weights:  49%|████▉     | 418/851 [00:01<00:02, 170.09it/s]Loading weights:  52%|█████▏    | 439/851 [00:02<00:02, 174.46it/s]Loading weights:  56%|█████▌    | 474/851 [00:02<00:01, 216.63it/s]Loading weights:  58%|█████▊    | 497/851 [00:02<00:01, 209.96it/s]Loading weights:  61%|██████    | 519/851 [00:02<00:01, 186.18it/s]Loading weights:  63%|██████▎   | 539/851 [00:02<00:02, 143.46it/s]Loading weights:  68%|██████▊   | 577/851 [00:02<00:01, 192.41it/s]Loading weights:  72%|███████▏  | 614/851 [00:02<00:01, 224.04it/s]Loading weights:  75%|███████▌  | 640/851 [00:02<00:00, 214.50it/s]Loading weights:  78%|███████▊  | 664/851 [00:03<00:00, 220.43it/s]Loading weights:  81%|████████  | 688/851 [00:03<00:00, 214.09it/s]Loading weights:  84%|████████▎ | 711/851 [00:03<00:00, 197.43it/s]Loading weights:  86%|████████▋ | 735/851 [00:03<00:00, 203.24it/s]Loading weights:  89%|████████▉ | 757/851 [00:03<00:00, 187.04it/s]Loading weights:  91%|█████████▏| 777/851 [00:03<00:00, 188.94it/s]Loading weights:  95%|█████████▍| 807/851 [00:03<00:00, 197.45it/s]Loading weights:  97%|█████████▋| 828/851 [00:03<00:00, 190.90it/s]Loading weights: 100%|██████████| 851/851 [00:04<00:00, 212.34it/s]
+engine loaded in 53.9s
+[rep 0] makespan=660.8s acc=0.938 gen_tok=20541 decode=30.62ms/tok
+{
+  "stage": "p1_s04_cuda_graph",
+  "engine": "p1_s04",
+  "engine_options": {
+    "linear_attn_fast_path": true,
+    "cudnn_sdpa": false,
+    "static_cache": true,
+    "max_cache_len": 4096,
+    "cuda_graph": true
+  },
+  "runner": "serial",
+  "config": {
+    "engine": "p1_s04",
+    "runner": "serial",
+    "num_tasks": 128,
+    "repeats": 1,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "device": "cuda"
+  },
+  "load_s": 53.93969111144543,
+  "makespan_s_all": [
+    660.8004242349416
+  ],
+  "makespan_s": 660.8004242349416,
+  "tasks": 128,
+  "accuracy": 0.9375,
+  "tasks_per_min": 11.622268567535674,
+  "turns": 255,
+  "tool_calls": 127,
+  "gen_tokens": 20541,
+  "prompt_tokens": 127121,
+  "redundant_prefill_tokens": 69773,
+  "gen_tok_per_s_e2e": 31.085028469498734,
+  "decode_ms_per_token": 30.618958775680188,
+  "prefill_tok_per_s": 4454.7116928419355,
+  "task_latency_p50_s": 4.328360218554735,
+  "task_latency_p90_s": 7.743536878377199,
+  "finish_reasons": {
+    "answer": 125,
+    "no_answer": 3
+  },
+  "peak_mem_gb": 50.70540523529053
+}
+breakdown (median rep):
+  decode          621.14s   94.0%  n=255
+  prefill          28.54s    4.3%  n=255
+  tool             10.40s    1.6%  n=127
+  template          0.63s    0.1%  n=255
+  other             0.05s    0.0%  n=0
+  detokenize        0.05s    0.0%  n=255
