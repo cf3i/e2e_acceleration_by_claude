@@ -74,7 +74,7 @@ async def main_async(args):
 
     out = Path(args.out or ROOT / "results" / args.stage)
     out.mkdir(parents=True, exist_ok=True)
-    tasks = load_tasks(args.num_tasks)
+    tasks = load_tasks(args.num_tasks, set(args.exclude_tasks), args.data)
     eargs = dict(model=MODEL, dtype="bfloat16", max_model_len=args.max_model_len,
                  gpu_memory_utilization=args.gpu_mem, enable_prefix_caching=args.prefix_caching,
                  max_num_seqs=args.max_num_seqs, limit_mm_per_prompt={"image": 0, "video": 0},
@@ -125,10 +125,12 @@ def main():
     ap.add_argument("--stage", required=True)
     ap.add_argument("--out", default=None)
     ap.add_argument("--num-tasks", type=int, default=128)
+    ap.add_argument("--data", default="gsm8k_128")
+    ap.add_argument("--exclude-tasks", type=int, nargs="*", default=[])
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--max-new-tokens", type=int, default=512)
     ap.add_argument("--max-turns", type=int, default=6)
-    ap.add_argument("--max-model-len", type=int, default=8192)
+    ap.add_argument("--max-model-len", type=int, default=16384)
     ap.add_argument("--max-num-seqs", type=int, default=128)
     ap.add_argument("--gpu-mem", type=float, default=0.92)
     ap.add_argument("--quantization", default=None, help="e.g. fp8 (dynamic per-tensor FP8 weights)")

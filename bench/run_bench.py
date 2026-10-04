@@ -21,8 +21,8 @@ from agentopt.runner import RUNNERS  # noqa: E402
 from agentopt.timing import Timer  # noqa: E402
 
 
-def load_tasks(n, exclude=()):
-    with open(ROOT / "data/gsm8k_128.jsonl") as f:
+def load_tasks(n, exclude=(), data="gsm8k_128"):
+    with open(ROOT / "data" / f"{data}.jsonl") as f:
         return [t for t in map(json.loads, f) if t["id"] not in exclude][:n]
 
 
@@ -91,6 +91,7 @@ def main():
     ap.add_argument("--engine", default="naive")
     ap.add_argument("--runner", default="serial")
     ap.add_argument("--num-tasks", type=int, default=128)
+    ap.add_argument("--data", default="gsm8k_128", help="data/<name>.jsonl (gsm8k_longctx_128: long, varied prompts)")
     ap.add_argument("--exclude-tasks", type=int, nargs="*", default=[], help="task ids to drop from the workload")
     ap.add_argument("--repeats", type=int, default=1)
     ap.add_argument("--max-new-tokens", type=int, default=512)
@@ -101,7 +102,7 @@ def main():
 
     out = Path(args.out or ROOT / "results" / args.stage)
     out.mkdir(parents=True, exist_ok=True)
-    tasks = load_tasks(args.num_tasks, set(args.exclude_tasks))
+    tasks = load_tasks(args.num_tasks, set(args.exclude_tasks), args.data)
     runner = RUNNERS[args.runner]
 
     t0 = time.perf_counter()
