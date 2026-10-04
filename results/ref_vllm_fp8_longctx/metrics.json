@@ -1,0 +1,86 @@
+{
+  "stage": "ref_vllm_fp8_longctx",
+  "engine": "vllm",
+  "engine_options": {
+    "model": "/mnt/data/u/feic/pjs/model/Qwen3.5-27B",
+    "dtype": "bfloat16",
+    "max_model_len": 16384,
+    "gpu_memory_utilization": 0.92,
+    "enable_prefix_caching": true,
+    "max_num_seqs": 128,
+    "limit_mm_per_prompt": {
+      "image": 0,
+      "video": 0
+    },
+    "quantization": "fp8",
+    "seed": 0,
+    "vllm": "0.30.0"
+  },
+  "runner": "vllm_async",
+  "config": {
+    "num_tasks": 128,
+    "data": "gsm8k_longctx_128",
+    "exclude_tasks": [
+      423
+    ],
+    "repeats": 3,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "max_model_len": 16384,
+    "max_num_seqs": 128,
+    "gpu_mem": 0.92,
+    "quantization": "fp8",
+    "prefix_caching": true
+  },
+  "load_s": 208.77756312675774,
+  "makespan_s_all": [
+    92.0215305890888,
+    91.96137122623622,
+    91.90303700976074
+  ],
+  "makespan_s": 91.96137122623622,
+  "tasks": 127,
+  "accuracy": 0.952755905511811,
+  "tasks_per_min": 82.86087841441454,
+  "turns": 253,
+  "tool_calls": 126,
+  "gen_tokens": 26574,
+  "prompt_tokens": 1151480,
+  "redundant_prefill_tokens": 581790,
+  "gen_tok_per_s_e2e": 288.9691578720016,
+  "decode_ms_per_token": 119.03156456129753,
+  "prefill_tok_per_s": 183.57835837652823,
+  "task_latency_p50_s": 74.87535069324076,
+  "task_latency_p90_s": 89.32545977458358,
+  "finish_reasons": {
+    "answer": 126,
+    "no_answer": 1
+  },
+  "agent_seconds": {
+    "prefill": 6272.416913317516,
+    "decode": 3133.029810817912,
+    "tool": 11.040726454928517
+  },
+  "peak_mem_gb": null,
+  "env": {
+    "host": "orix-worker-h100-6",
+    "slurm_job_id": "297475",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.13.0+cu129",
+    "transformers": "5.18.0",
+    "git_commit": "c103dfbb03eb91268731cf8d75e53ba74f8aa9fc",
+    "snapshot": true,
+    "git_dirty": false,
+    "argv": [
+      "bench/run_vllm.py",
+      "--stage",
+      "ref_vllm_fp8_longctx",
+      "--quantization",
+      "fp8",
+      "--exclude-tasks",
+      "423",
+      "--data",
+      "gsm8k_longctx_128"
+    ]
+  }
+}

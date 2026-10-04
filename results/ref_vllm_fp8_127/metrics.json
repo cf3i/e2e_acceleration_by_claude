@@ -1,0 +1,84 @@
+{
+  "stage": "ref_vllm_fp8_127",
+  "engine": "vllm",
+  "engine_options": {
+    "model": "/mnt/data/u/feic/pjs/model/Qwen3.5-27B",
+    "dtype": "bfloat16",
+    "max_model_len": 16384,
+    "gpu_memory_utilization": 0.92,
+    "enable_prefix_caching": true,
+    "max_num_seqs": 128,
+    "limit_mm_per_prompt": {
+      "image": 0,
+      "video": 0
+    },
+    "quantization": "fp8",
+    "seed": 0,
+    "vllm": "0.30.0"
+  },
+  "runner": "vllm_async",
+  "config": {
+    "num_tasks": 128,
+    "data": "gsm8k_128",
+    "exclude_tasks": [
+      423
+    ],
+    "repeats": 3,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "max_model_len": 16384,
+    "max_num_seqs": 128,
+    "gpu_mem": 0.92,
+    "quantization": "fp8",
+    "prefix_caching": true
+  },
+  "load_s": 211.33448031172156,
+  "makespan_s_all": [
+    17.67132111825049,
+    17.48389646038413,
+    17.53785620443523
+  ],
+  "makespan_s": 17.53785620443523,
+  "tasks": 127,
+  "accuracy": 0.9448818897637795,
+  "tasks_per_min": 434.4886804393426,
+  "turns": 253,
+  "tool_calls": 126,
+  "gen_tokens": 19561,
+  "prompt_tokens": 125129,
+  "redundant_prefill_tokens": 68490,
+  "gen_tok_per_s_e2e": 1115.358671663252,
+  "decode_ms_per_token": 54.23693700720752,
+  "prefill_tok_per_s": 439.67761213444464,
+  "task_latency_p50_s": 10.332062428817153,
+  "task_latency_p90_s": 13.94110487215221,
+  "finish_reasons": {
+    "no_answer": 2,
+    "answer": 125
+  },
+  "agent_seconds": {
+    "prefill": 284.5926118288189,
+    "decode": 1047.2067797351629,
+    "tool": 11.025950970128179
+  },
+  "peak_mem_gb": null,
+  "env": {
+    "host": "orix-worker-h100-5",
+    "slurm_job_id": "297474",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.13.0+cu129",
+    "transformers": "5.18.0",
+    "git_commit": "c103dfbb03eb91268731cf8d75e53ba74f8aa9fc",
+    "snapshot": true,
+    "git_dirty": false,
+    "argv": [
+      "bench/run_vllm.py",
+      "--stage",
+      "ref_vllm_fp8_127",
+      "--quantization",
+      "fp8",
+      "--exclude-tasks",
+      "423"
+    ]
+  }
+}

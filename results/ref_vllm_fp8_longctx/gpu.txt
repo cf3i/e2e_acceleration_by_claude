@@ -1,0 +1,2 @@
+name, driver_version, memory.total [MiB]
+NVIDIA H100 80GB HBM3, 570.211.01, 81559 MiB

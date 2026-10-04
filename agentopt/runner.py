@@ -149,5 +149,99 @@ def run_continuous(engine, tasks, timer, max_new_tokens: int = 512, max_turns: i
     return results, turns
 
 
-RUNNERS = {"serial": run_serial, "continuous": run_continuous,
+def run_v3(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6, tool_workers: int = 8):
+    """Phase 3 (V3Engine): turns are submitted without blocking; every `step()` runs one mixed forward (decode
+    rows + prefill chunks) and returns the tokens of the previous step plus the slots whose turn ended. Tool calls
+    run in a thread pool. New tasks are admitted while a slot is free and the KV cache can take them."""
+    tok = engine.tok
+    pool = cf.ThreadPoolExecutor(tool_workers)
+    pending = {}  # future -> (slot, agent state, t_task, turn record)
+    queue, free = collections.deque(tasks), list(range(engine.num_slots))[::-1]
+    engine.reset_stats()
+    if len(tasks) >= 2:
+        firsts = [tok.encode(AgentState(t).prompt_text(tok), add_special_tokens=False) for t in tasks[:4]]
+        n = next((i for i, xs in enumerate(zip(*firsts)) if len(set(xs)) > 1), min(map(len, firsts)) - 1)
+        with timer("prefill"):
+            engine.register_prefix(firsts[0][:n])
+    live, results, turns = {}, [], []
+    nxt = None  # tokenized first prompt of queue[0]
+
+    def start_turn(slot, st, t_task, ids=None):
+        if ids is None:
+            with timer("template"):
+                ids = tok.encode(st.prompt_text(tok), add_special_tokens=False)
+        limit = min(max_new_tokens, engine.room(len(ids)))
+        engine.submit(slot, ids, limit)
+        live[slot] = {"st": st, "t_task": t_task, "ids": ids, "gen": [], "t0": time.perf_counter(), "decode_s": 0.0}
+
+    def finish_turn(slot):
+        run = live.pop(slot)
+        st, gen = run["st"], run["gen"]
+        stopped = bool(gen) and gen[-1] in engine.stop_ids
+        if stopped:
+            gen = gen[:-1]
+        with timer("detokenize"):
+            text = tok.decode(gen, skip_special_tokens=False)
+        call = st.observe(text)
+        rec = {"task_id": st.task["id"], "turn": st.turns, "prompt_len": len(run["ids"]), "gen_len": len(gen),
+               "prefill_s": 0.0, "decode_s": run["decode_s"], "turn_s": time.perf_counter() - run["t0"],
+               "tool_s": 0.0, "stopped": stopped}
+        turns.append(rec)
+        if call is not None:
+            pending[pool.submit(_timed_execute, call)] = (slot, st, run["t_task"], rec)
+            return
+        engine.release(slot)
+        free.append(slot)
+        results.append({
+            "task_id": st.task["id"], "gold": st.task["answer"], "pred": st.answer, "correct": st.correct,
+            "turns": st.turns, "tool_calls": st.tool_calls, "finish_reason": st.finish_reason,
+            "latency_s": time.perf_counter() - run["t_task"], "messages": st.messages,
+        })
+
+    def collect(futures):
+        for fut in futures:
+            slot, st, t_task, rec = pending.pop(fut)
+            result, rec["tool_s"] = fut.result()
+            st.add_tool_result(result)
+            start_turn(slot, st, t_task)
+
+    while queue or live or pending:
+        if pending:
+            collect([f for f in list(pending) if f.done()])
+        while free and queue:
+            if nxt is None:
+                st = AgentState(queue[0], max_turns=max_turns)
+                with timer("template"):
+                    nxt = (st, tok.encode(st.prompt_text(tok), add_special_tokens=False))
+            if not engine.can_admit(len(nxt[1]), max_new_tokens):
+                break
+            queue.popleft()
+            start_turn(free.pop(), nxt[0], time.perf_counter(), nxt[1])
+            nxt = None
+        if not live:
+            if pending:
+                with timer("tool_wait"):
+                    done, _ = cf.wait(list(pending), return_when=cf.FIRST_COMPLETED)
+                collect(done)
+            elif queue:
+                raise RuntimeError("cannot admit a task into an empty engine (KV cache too small)")
+            continue
+        with timer("decode") as t_step:
+            out, done = engine.step()
+        share = t_step.elapsed / len(live)
+        for slot, t in out.items():
+            run = live.get(slot)
+            if run is not None:
+                run["gen"].append(t)
+        for run in live.values():
+            run["decode_s"] += share
+        for slot in done:
+            if slot in live:
+                finish_turn(slot)
+    engine.drain()
+    pool.shutdown()
+    return results, turns
+
+
+RUNNERS = {"serial": run_serial, "v3": run_v3, "continuous": run_continuous,
            "continuous_async": functools.partial(run_continuous, async_tools=True)}

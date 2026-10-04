@@ -48,6 +48,11 @@ PRESETS.update({
                               "buckets": (8, 16, 24, 32, 48), "state_dtype": "bf16", "recurrent_launch": "tuned"}),
 })
 
+# Phase 3: own forward (agentopt/v3): fused Triton kernels, paged KV, token-budget mixed steps, async scheduling.
+PRESETS.update({
+    "p3_a1": ("v3", {"num_slots": 128, "token_budget": 2048}),
+})
+
 
 def make_engine(name: str, **kw):
     if name not in PRESETS:
@@ -55,6 +60,8 @@ def make_engine(name: str, **kw):
     cls, opts = PRESETS[name]
     if cls == "naive":
         from .naive import NaiveEngine as Engine
+    elif cls == "v3":
+        from ..v3.engine import V3Engine as Engine
     elif cls == "batch":
         from .batch import BatchEngine as Engine
     else:

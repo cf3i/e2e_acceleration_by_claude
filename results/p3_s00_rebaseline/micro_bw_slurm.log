@@ -1,0 +1,23 @@
+HBM  0.5 GB: triton read    3085 GB/s, torch copy (r+w)    2989 GB/s
+HBM  2.0 GB: triton read    3172 GB/s, torch copy (r+w)    3045 GB/s
+HBM  8.0 GB: triton read    3197 GB/s, torch copy (r+w)    3049 GB/s
+mlp.gate/up        N= 17408 K=  5120 M1:  34.5us/ 81%  M8:  34.6us/ 81%  M16:  35.5us/ 79%  M32:  36.1us/ 78%  M64:  38.2us/ 75%  M128:  39.0us/ 76%  M256:  43.2us/ 72%
+mlp.down           N=  5120 K= 17408 M1:  34.0us/ 82%  M8:  34.9us/ 80%  M16:  35.3us/ 79%  M32:  35.5us/ 79%  M64:  35.9us/ 79%  M128:  36.8us/ 79%  M256:  46.6us/ 65%
+gdn.in_proj_qkv    N= 10240 K=  5120 M1:  21.8us/ 75%  M8:  21.9us/ 75%  M16:  22.1us/ 75%  M32:  22.6us/ 74%  M64:  23.0us/ 74%  M128:  24.3us/ 72%  M256:  29.2us/ 63%
+gdn.in_proj_z      N=  6144 K=  5120 M1:  15.7us/ 63%  M8:  15.0us/ 66%  M16:  15.3us/ 65%  M32:  15.6us/ 64%  M64:  15.6us/ 66%  M128:  15.7us/ 67%  M256:  17.2us/ 65%
+gdn.out_proj       N=  5120 K=  6144 M1:  15.8us/ 62%  M8:  14.8us/ 67%  M16:  15.0us/ 66%  M32:  15.0us/ 67%  M64:  15.0us/ 68%  M128:  15.4us/ 68%  M256:  18.8us/ 59%
+attn.q_proj        N= 12288 K=  5120 M1:  25.0us/ 79%  M8:  25.0us/ 79%  M16:  25.5us/ 78%  M32:  27.4us/ 73%  M64:  26.5us/ 76%  M128:  28.0us/ 75%  M256:  32.4us/ 68%
+attn.k/v_proj      N=  1024 K=  5120 M1:  15.0us/ 11%  M8:  14.9us/ 11%  M16:  14.8us/ 11%  M32:  14.8us/ 12%  M64:  14.8us/ 12%  M128:  14.6us/ 13%  M256:  14.8us/ 15%
+attn.o_proj        N=  5120 K=  6144 M1:  15.2us/ 65%  M8:  14.8us/ 67%  M16:  14.8us/ 67%  M32:  15.0us/ 67%  M64:  15.0us/ 68%  M128:  15.5us/ 68%  M256:  18.8us/ 59%
+merged.gate_up     N= 34816 K=  5120 M1:  63.8us/ 87%  M8:  64.4us/ 87%  M16:  65.0us/ 86%  M32:  65.9us/ 86%  M64:  68.4us/ 84%  M128:  70.1us/ 84%  M256:  82.5us/ 75%
+merged.gdn_in      N= 16480 K=  5120 M1:  34.1us/ 77%  M8:  34.1us/ 78%  M16:  34.8us/ 76%  M32:  35.4us/ 76%  M64:  34.7us/ 78%  M128:  37.8us/ 74%  M256:  40.7us/ 72%
+merged.attn_qkv    N= 14336 K=  5120 M1:  28.2us/ 81%  M8:  28.4us/ 81%  M16:  29.2us/ 79%  M32:  29.8us/ 78%  M64:  30.2us/ 78%  M128:  31.8us/ 76%  M256:  35.9us/ 71%
+lm_head.bf16       M1: 840.8us/ 95%  M8: 847.0us/ 94%  M16: 850.8us/ 94%  M32: 851.3us/ 94%  M64: 867.4us/ 93%  M128: 891.4us/ 91%  M256:1007.0us/ 83%
+M=   1: all GEMMs of a step  11.11 ms (merged shapes  10.19 ms), weight-read SOL  8.41 ms -> 75.7% of SOL
+M=   8: all GEMMs of a step  11.11 ms (merged shapes  10.25 ms), weight-read SOL  8.41 ms -> 75.6% of SOL
+M=  16: all GEMMs of a step  11.29 ms (merged shapes  10.36 ms), weight-read SOL  8.41 ms -> 74.5% of SOL
+M=  32: all GEMMs of a step  11.45 ms (merged shapes  10.48 ms), weight-read SOL  8.41 ms -> 73.4% of SOL
+M=  64: all GEMMs of a step  11.77 ms (merged shapes  10.66 ms), weight-read SOL  8.41 ms -> 71.4% of SOL
+M= 128: all GEMMs of a step  12.06 ms (merged shapes  11.04 ms), weight-read SOL  8.41 ms -> 69.7% of SOL
+M= 256: all GEMMs of a step  13.94 ms (merged shapes  13.00 ms), weight-read SOL  8.41 ms -> 60.3% of SOL
+tiny dependent kernel inside a CUDA graph: 1.40 us each (2000/graph), 1.25 us (100/graph)
