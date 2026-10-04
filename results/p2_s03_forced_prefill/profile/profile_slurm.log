@@ -1,0 +1,83 @@
+WARNING: Device-side CUDA Event completion trace is currently enabled.
+         This may increase runtime overhead and the likelihood of false
+         dependencies across CUDA Streams. If you wish to avoid this, please
+         disable the feature with --cuda-event-trace=false.
+Loading weights:   0%|          | 0/851 [00:00<?, ?it/s]Loading weights:   6%|▋         | 54/851 [00:00<00:01, 424.42it/s]Loading weights:  11%|█▏        | 97/851 [00:00<00:02, 357.29it/s]Loading weights:  16%|█▌        | 136/851 [00:00<00:01, 367.83it/s]Loading weights:  20%|██        | 174/851 [00:00<00:01, 340.46it/s]Loading weights:  25%|██▍       | 209/851 [00:00<00:01, 335.50it/s]Loading weights:  29%|██▉       | 249/851 [00:00<00:01, 323.13it/s]Loading weights:  34%|███▍      | 292/851 [00:00<00:01, 334.39it/s]Loading weights:  39%|███▉      | 332/851 [00:00<00:01, 348.09it/s]Loading weights:  43%|████▎     | 368/851 [00:01<00:01, 335.13it/s]Loading weights:  47%|████▋     | 402/851 [00:01<00:01, 308.63it/s]Loading weights:  51%|█████     | 434/851 [00:01<00:01, 303.93it/s]Loading weights:  55%|█████▌    | 469/851 [00:01<00:01, 316.40it/s]Loading weights:  59%|█████▉    | 506/851 [00:01<00:01, 327.57it/s]Loading weights:  63%|██████▎   | 540/851 [00:01<00:01, 306.48it/s]Loading weights:  68%|██████▊   | 576/851 [00:01<00:00, 308.22it/s]Loading weights:  72%|███████▏  | 614/851 [00:01<00:00, 317.69it/s]Loading weights:  76%|███████▋  | 649/851 [00:02<00:00, 280.57it/s]Loading weights:  81%|████████▏ | 693/851 [00:02<00:00, 307.20it/s]Loading weights:  85%|████████▌ | 725/851 [00:02<00:00, 289.87it/s]Loading weights:  89%|████████▊ | 755/851 [00:02<00:00, 289.04it/s]Loading weights:  94%|█████████▍| 803/851 [00:02<00:00, 337.18it/s]Loading weights:  98%|█████████▊| 838/851 [00:02<00:00, 318.42it/s]Loading weights: 100%|██████████| 851/851 [00:02<00:00, 325.53it/s]
+batch decode graph (S=32) captured in 36.1s, cache 8.6 GiB
+p2_s03: S=32, step 30.27 ms (0.946 ms per row)
+Capture range started in the application.
+Capture range ended in the application.
+Generating '/home/feic/.cache/codex-tmp/nsys-report-be9d.qdstrm'
+[1/1] [0%                          ] nsys.nsys-repProcessing events...
+[1/1] [0%                          ] nsys.nsys-rep[1/1] [====27%                     ] nsys.nsys-rep[1/1] [============55%             ] nsys.nsys-rep[1/1] [==================77%       ] nsys.nsys-rep[1/1] [========================99% ] nsys.nsys-rep[1/1] [6%                          ] nsys.nsys-rep[1/1] [======34%                   ] nsys.nsys-rep[1/1] [=============58%            ] nsys.nsys-rep[1/1] [========================100%] nsys.nsys-rep[1/1] [========================100%] nsys.nsys-rep
+Generated:
+	/mnt/data/u/feic/pjs/playground/optimize_agent_to_the_most/runs/p2_s03_forced_prefill-profile_batch-4778103-1004-162756/results/p2_s03_forced_prefill/profile/nsys.nsys-rep
+
+## NVTX ranges (L1 sections): (no data)
+
+## GPU kernels: total 0.60s over 30040 instances
+ time%   total_s     count    avg_us  name
+  27.0     0.161      2560      62.8  nvjet_tst_192x32_64x7_4x1_v_bz_TNT
+  23.6     0.141      3520      39.9  nvjet_tst_64x32_64x16_4x1_v_bz_TNT
+  13.1     0.078       960      81.2  fused_recurrent_gated_delta_rule_fwd_kernel
+  10.7     0.064       960      66.3  triton_poi_fused_copy__5
+   8.5     0.051      1280      39.7  nvjet_tst_128x32_64x10_4x1_v_bz_TNT
+   2.9     0.017        20     859.6  nvjet_tst_384x32_64x4_2x1_v_bz_TNT
+   2.6     0.015       320      47.6  nvjet_tst_512x8_64x3_2x1_v_bz_TNT
+   2.5     0.015       320      46.2  nvjet_tst_128x8_64x12_2x1_v_bz_NNT
+   1.6     0.009      1920       4.9  nvjet_tst_16x64_64x16_4x1_v_bz_splitK_TNN
+   1.1     0.006      2260       2.8  triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0
+   1.1     0.006       960       6.6  void causal_conv1d_update_kernel<Causal_conv1d_update_kernel_traits<(int)64, (int)4, c10::BFloat16, c10::BFloa
+   0.8     0.005      2560       1.9  void cublasLt::splitKreduce_kernel<(int)32, (int)16, int, float, __nv_bfloat16, float, __nv_bfloat16, (bool)0,
+   0.7     0.004       640       6.5  nvjet_tst_64x32_64x16_4x1_v_bz_splitK_TNT
+   0.5     0.003       960       2.9  layer_norm_gated_fwd_kernel
+   0.4     0.002       960       2.2  triton_poi_fused__unsafe_view_mul_silu_1
+   0.3     0.002       320       6.4  triton_red_fused__softmax__to_copy_bitwise_not_exp_masked_fill_mul_prepare_softmax_online_sub_view_8
+   0.3     0.002       960       1.7  triton_poi_fused__unsafe_view_add_2
+   0.2     0.001       960       1.5  triton_poi_fused__to_copy__unsafe_view_add_clone_exp_expand_mul_neg_sigmoid_softplus_split_with_sizes_transpos
+   0.2     0.001       960       1.5  triton_poi_fused__to_copy__unsafe_view_add_clone_exp_expand_mul_neg_sigmoid_softplus_split_with_sizes_transpos
+   0.2     0.001       960       1.5  triton_poi_fused__to_copy__unsafe_view_add_clone_exp_expand_mul_neg_sigmoid_softplus_split_with_sizes_transpos
+   0.2     0.001       960       1.5  triton_poi_fused__to_copy__unsafe_view_add_clone_exp_expand_mul_neg_sigmoid_softplus_split_with_sizes_transpos
+   0.2     0.001       960       1.3  triton_poi_fused__to_copy__unsafe_view_add_clone_exp_expand_mul_neg_sigmoid_softplus_split_with_sizes_transpos
+   0.2     0.001       320       2.8  triton_red_fused__to_copy__unsafe_view_add_mean_mul_pow_rsqrt_10
+   0.1     0.001       320       2.2  triton_poi_fused__unsafe_view_mul_silu_11
+   0.1     0.001       320       2.0  triton_poi_fused__unsafe_view_clone_mul_sigmoid_split_transpose_view_9
+
+## CUDA API (host side): total 0.61s over 142 instances
+ time%   total_s     count    avg_us  name
+  92.3     0.566        20   28317.6  cudaEventSynchronize
+   7.6     0.046        20    2318.3  cudaGraphLaunch_v10000
+   0.0     0.000        20      13.1  cudaMemcpyAsync
+   0.0     0.000         1     147.8  cudaDeviceSynchronize
+   0.0     0.000        20       4.8  cudaEventRecordWithFlags_v11010
+   0.0     0.000        60       1.0  cudaStreamIsCapturing_v10000
+   0.0     0.000         1       4.6  cuProfilerStart
+
+## GPU memcpy/memset: total 0.00s over 440 instances
+ time%   total_s     count    avg_us  name
+  72.8     0.000       360       0.9  [CUDA memset]
+  16.7     0.000        60       1.2  [CUDA memcpy Device-to-Device]
+  10.5     0.000        20       2.3  [CUDA memcpy Device-to-Host]
+
+## CUDA-graph kernels: 20 replays, 1502 kernels/replay, 29.76 ms GPU time/replay
+  GEMM                            70.2%   20.89 ms/replay     658 kernels/replay  avg   31.8 us
+  triton (inductor)               15.0%    4.48 ms/replay     692 kernels/replay  avg    6.5 us
+  fla/conv1d                      14.6%    4.35 ms/replay     144 kernels/replay  avg   30.2 us
+  torch reduce                     0.1%    0.02 ms/replay       1 kernels/replay  avg   20.2 us
+  torch elementwise/copy/other     0.0%    0.01 ms/replay       7 kernels/replay  avg    2.0 us
+ time%  us/replay  n/replay   avg_us  name
+  27.0     8036.7       128     62.8  nvjet_tst_192x32_64x7_4x1_v_bz_TNT
+  23.6     7028.9       176     39.9  nvjet_tst_64x32_64x16_4x1_v_bz_TNT
+  13.1     3898.6        48     81.2  fused_recurrent_gated_delta_rule_fwd_kernel
+  10.7     3183.1        48     66.3  triton_poi_fused_copy__5
+   8.5     2542.0        64     39.7  nvjet_tst_128x32_64x10_4x1_v_bz_TNT
+   2.9      859.6         1    859.6  nvjet_tst_384x32_64x4_2x1_v_bz_TNT
+   2.6      761.8        16     47.6  nvjet_tst_512x8_64x3_2x1_v_bz_TNT
+   2.5      739.0        16     46.2  nvjet_tst_128x8_64x12_2x1_v_bz_NNT
+   1.6      474.1        96      4.9  nvjet_tst_16x64_64x16_4x1_v_bz_splitK_TNN
+   1.1      320.7       113      2.8  triton_red_fused__to_copy_add_mean_mul_pow_rsqrt_0
+   1.1      315.8        48      6.6  causal_conv1d_update_kernel
+   0.8      241.5       128      1.9  splitKreduce_kernel
+   0.7      207.8        32      6.5  nvjet_tst_64x32_64x16_4x1_v_bz_splitK_TNT
+   0.5      139.9        48      2.9  layer_norm_gated_fwd_kernel
+   0.4      105.0        48      2.2  triton_poi_fused__unsafe_view_mul_silu_1
