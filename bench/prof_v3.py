@@ -43,7 +43,7 @@ def main():
     ap.add_argument("--steps", type=int, default=5)
     ap.add_argument("--pos0", type=int, default=0, help="prefill: chunks continue sessions with this much context")
     args = ap.parse_args()
-    eng = V3Engine(num_slots=128, token_budget=8192)
+    eng = V3Engine(num_slots=128)
     tok = list(range(1000, 1000 + args.ctx))
     # B decoding sessions at context ~ctx: prefill them (outside the measurement), then keep them decoding
     for i in range(args.B):

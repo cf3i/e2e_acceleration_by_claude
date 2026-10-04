@@ -9,11 +9,21 @@ Conventions
 - Activation quantization is per token (one fp32 scale per row, amax / 448), fused into the producer kernel.
 - Recurrent / conv / KV state lives in pools indexed by slot (recurrent, conv) or by paged block (KV).
 """
+import os
+
 import torch
 import triton
 import triton.language as tl
+from triton.language.extra.cuda import gdc_wait
 
 FP8 = torch.float8_e4m3fn
+
+# Programmatic dependent launch: every kernel below starts with gdc_wait() and is launched with launch_pdl, so the
+# GPU may launch it while its predecessor is still running: its programs get resident early and wait in
+# griddepcontrol.wait for the predecessor's completion and memory flush. Hides the launch latency between
+# back-to-back kernels. No early griddepcontrol.launch_dependents: measured slower at large batch (dependents
+# resident too early), the implicit trigger at exit is enough. AGENTOPT_PDL=0 turns it off.
+PDL = os.environ.get("AGENTOPT_PDL", "1") != "0"
 
 
 # ---------------------------------------------------------------- FP8 GEMM for small M (merged weights)
@@ -23,6 +33,7 @@ FP8 = torch.float8_e4m3fn
 @triton.jit
 def _mm_fp8_kernel(x_ptr, w_ptr, s_ptr, y_ptr, M, N, K: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,
                    BK: tl.constexpr, STAGES: tl.constexpr):
+    gdc_wait()
     m = tl.program_id(1) * BM + tl.arange(0, BM)
     n = tl.program_id(0) * BN + tl.arange(0, BN)
     mm = m < M
@@ -60,7 +71,7 @@ def mm_fp8(x, w, s, cfg):
     y = torch.empty((M, N), dtype=torch.bfloat16, device=x.device)
     c = dict(cfg)
     BM, BN = c["BM"], c["BN"]
-    _mm_fp8_kernel[(triton.cdiv(N, BN), triton.cdiv(M, BM))](x, w, s, y, M, N, K=K, **c)
+    _mm_fp8_kernel[(triton.cdiv(N, BN), triton.cdiv(M, BM))](x, w, s, y, M, N, K=K, **c, launch_pdl=PDL)
     return y
 
 
@@ -68,6 +79,7 @@ def mm_fp8(x, w, s, cfg):
 @triton.jit
 def _add_rmsnorm_kernel(res_ptr, d_ptr, ds_ptr, w_ptr, q_ptr, s_ptr, out_ptr, N, eps,
                         HAS_DELTA: tl.constexpr, QUANT: tl.constexpr, BLOCK: tl.constexpr):
+    gdc_wait()
     row = tl.program_id(0).to(tl.int64)
     offs = tl.arange(0, BLOCK)
     m = offs < N
@@ -101,13 +113,14 @@ def add_rmsnorm_quant(res, w1, eps, delta=None, dscale=None, quant=True):
         q = s = None
         out = torch.empty_like(res)
     _add_rmsnorm_kernel[(T,)](res, delta, dscale, w1, q, s, out, N, eps, HAS_DELTA=delta is not None,
-                              QUANT=quant, BLOCK=triton.next_power_of_2(N), num_warps=16)
+                              QUANT=quant, BLOCK=triton.next_power_of_2(N), num_warps=16, launch_pdl=PDL)
     return (q, s) if quant else out
 
 
 # ---------------------------------------------------------------- SiLU(gate) * up + quant (MLP)
 @triton.jit
 def _silu_mul_quant_kernel(g_ptr, u_ptr, xs_ptr, q_ptr, s_ptr, N, GS, BLOCK: tl.constexpr):
+    gdc_wait()
     row = tl.program_id(0).to(tl.int64)
     xs = tl.load(xs_ptr + row)
     amax = tl.zeros((BLOCK,), tl.float32)
@@ -142,6 +155,7 @@ def _silu_mul_quant1_kernel(g_ptr, u_ptr, xs_ptr, q_ptr, s_ptr, GS, N: tl.conste
                             TAIL: tl.constexpr):
     """Single pass, the whole row (N = 2 CH + TAIL) in registers: the row is read once and the program has all
     its loads in flight at once (the two-pass loop is latency-bound for small T and re-reads rows for large T)."""
+    gdc_wait()
     row = tl.program_id(0).to(tl.int64)
     xs = tl.load(xs_ptr + row)
     gb = row * GS
@@ -166,9 +180,10 @@ def silu_mul_quant(gate, up, xs):
     CH = 8192
     tail = N - 2 * CH
     if 0 < tail <= CH and tail & (tail - 1) == 0:
-        _silu_mul_quant1_kernel[(T,)](gate, up, xs, q, s, gate.stride(0), N=N, CH=CH, TAIL=tail, num_warps=16)
+        _silu_mul_quant1_kernel[(T,)](gate, up, xs, q, s, gate.stride(0), N=N, CH=CH, TAIL=tail, num_warps=16,
+                                      launch_pdl=PDL)
     else:
-        _silu_mul_quant_kernel[(T,)](gate, up, xs, q, s, N, gate.stride(0), BLOCK=4096, num_warps=8)
+        _silu_mul_quant_kernel[(T,)](gate, up, xs, q, s, N, gate.stride(0), BLOCK=4096, num_warps=8, launch_pdl=PDL)
     return q, s
 
 
@@ -199,6 +214,7 @@ def _conv1d_seq_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, seq
                        QK: tl.constexpr, VC: tl.constexpr, BLOCK_C: tl.constexpr, DK: tl.constexpr):
     """One program per (sequence, channel block): walks the sequence's new tokens in order with the last 3 inputs
     in registers (initialized from the slot's conv state) and writes the new state. For decode (1 token/seq)."""
+    gdc_wait()
     C: tl.constexpr = 2 * QK + VC
     s = tl.program_id(0)
     n = tl.load(seq_len + s)
@@ -236,6 +252,7 @@ def _conv1d_rows_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, ro
                         DK: tl.constexpr):
     """Token-parallel conv: one program per (row block, channel block). Tap inputs before the row's sequence start
     come from the slot's conv state. Does not update the state (see _conv1d_state_kernel)."""
+    gdc_wait()
     C: tl.constexpr = 2 * QK + VC
     rows = tl.program_id(0) * BT + tl.arange(0, BT)
     rm = rows < T
@@ -270,6 +287,7 @@ def _conv_window_val(x_ptr, xs_ptr, st, t0, n, j, offs, C, XS):
 @triton.jit
 def _conv1d_state_kernel(x_ptr, xs_ptr, state_ptr, seq_slot, seq_start, seq_len, C, XS, BLOCK_C: tl.constexpr):
     """New conv window of each sequence = its last 3 inputs (older ones from the old window if it fed < 3)."""
+    gdc_wait()
     s = tl.program_id(0)
     n = tl.load(seq_len + s)
     if n > 0:
@@ -299,7 +317,8 @@ def conv1d_varlen(x, xs, w, state, seq_slot, seq_start, seq_len, n_seqs, HK=16, 
     q, k, v = _conv_outs(T, x.device)
     BLOCK_C = 256
     _conv1d_seq_kernel[(n_seqs, C // BLOCK_C)](x, xs, w, state, q, k, v, seq_slot, seq_start, seq_len,
-                                               x.stride(0), QK=HK * DK, VC=C - 2 * HK * DK, BLOCK_C=BLOCK_C, DK=DK, num_warps=2)
+                                               x.stride(0), QK=HK * DK, VC=C - 2 * HK * DK, BLOCK_C=BLOCK_C, DK=DK, num_warps=2,
+                                               launch_pdl=PDL)
     return q, k, v
 
 
@@ -311,9 +330,9 @@ def conv1d_rows(x, xs, w, state, row_start, row_slot, seq_slot, seq_start, seq_l
     BT, BLOCK_C = 16, 256
     _conv1d_rows_kernel[(triton.cdiv(T, BT), C // BLOCK_C)](x, xs, w, state, q, k, v, row_start, row_slot, T, x.stride(0),
                                                             QK=HK * DK, VC=C - 2 * HK * DK, BT=BT, BLOCK_C=BLOCK_C,
-                                                            DK=DK, num_warps=4)
+                                                            DK=DK, num_warps=4, launch_pdl=PDL)
     _conv1d_state_kernel[(n_seqs, triton.cdiv(C, 1024))](x, xs, state, seq_slot, seq_start, seq_len, C, x.stride(0),
-                                                         BLOCK_C=1024, num_warps=4)
+                                                         BLOCK_C=1024, num_warps=4, launch_pdl=PDL)
     return q, k, v
 
 
@@ -321,6 +340,7 @@ def conv1d_rows(x, xs, w, state, row_start, row_slot, seq_slot, seq_start, seq_l
 @triton.jit
 def _gdn_gates_kernel(a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_ptr, g_ptr, beta_ptr, AS, HV: tl.constexpr,
                       BH: tl.constexpr):
+    gdc_wait()
     r = tl.program_id(0).to(tl.int64)
     h = tl.arange(0, BH)
     m = h < HV
@@ -339,7 +359,8 @@ def gdn_gates(a, b, xs, A_log, dt_bias, HV=48):
     assert a.stride(0) == b.stride(0) and a.stride(1) == b.stride(1) == 1
     g = torch.empty((T, HV), dtype=torch.float32, device=a.device)
     beta = torch.empty_like(g)
-    _gdn_gates_kernel[(T,)](a, b, xs, A_log, dt_bias, g, beta, a.stride(0), HV=HV, BH=triton.next_power_of_2(HV), num_warps=1)
+    _gdn_gates_kernel[(T,)](a, b, xs, A_log, dt_bias, g, beta, a.stride(0), HV=HV, BH=triton.next_power_of_2(HV), num_warps=1,
+                            launch_pdl=PDL)
     return g, beta
 
 
@@ -351,6 +372,7 @@ def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_
     """One program per (decode row, group of HPP value heads, V block): gates + one gated delta-rule step on the
     slot's [DK, DV] states (bf16 storage, fp32 math), written back in place; the head loop is software-pipelined
     (the next head's state load overlaps this head's math). q, k are l2-normalized already."""
+    gdc_wait()
     r = tl.load(row0_ptr).to(tl.int64) + tl.program_id(0)
     vb = tl.program_id(2)
     slot = tl.load(row_slot + r).to(tl.int64)
@@ -399,7 +421,7 @@ def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows,
     assert a.stride(0) == b.stride(0) and a.stride(1) == b.stride(1) == 1
     _gdn_decode_kernel[(n_rows, HV // c["HPP"], DV // c["BV"])](
         q, k, v, a, b, xs, A_log, dt_bias, state, o, row_slot, row0, a.stride(0), HV=HV, HK=HK, DK=DK, DV=DV, BV=c["BV"],
-        HPP=c["HPP"], STAGES=c["STAGES"], num_warps=c["num_warps"])
+        HPP=c["HPP"], STAGES=c["STAGES"], num_warps=c["num_warps"], launch_pdl=PDL)
     return o
 
 
@@ -412,6 +434,7 @@ def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows,
 def _gdn_chunk_h_kernel(k, v, w, v_new, g, h, state, seq_slot, cu_seqlens, chunk_offsets,
                         H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr, V: tl.constexpr, BT: tl.constexpr,
                         BV: tl.constexpr):
+    gdc_wait()
     i_v, i_nh = tl.program_id(0), tl.program_id(1)
     i_n, i_h = i_nh // HV, i_nh % HV
     bos = tl.load(cu_seqlens + i_n).to(tl.int32)
@@ -485,7 +508,8 @@ def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, ch
     c = GDN_CHUNK_H_CFG
     _gdn_chunk_h_kernel[(DV // c["BV"], n_seqs * HV)](k, u, w, v_new, gc, h, state, seq_slot, cu_seqlens,
                                                       chunk_offsets, H=HK, HV=HV, K=DK, V=DV, BT=64, BV=c["BV"],
-                                                      num_warps=c["num_warps"], num_stages=c["num_stages"])
+                                                      num_warps=c["num_warps"], num_stages=c["num_stages"],
+                                                      launch_pdl=PDL)
     o = chunk_fwd_o(q=q, k=k, v=v_new, h=h, g=gc, scale=scale, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices)
     return o[0]
 
@@ -494,6 +518,7 @@ def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, ch
 @triton.jit
 def _gated_norm_quant_kernel(o_ptr, z_ptr, xs_ptr, w_ptr, q_ptr, s_ptr, eps, ZS,
                              H: tl.constexpr, D: tl.constexpr, BH: tl.constexpr):
+    gdc_wait()
     row = tl.program_id(0).to(tl.int64)
     h = tl.arange(0, BH)
     d = tl.arange(0, D)
@@ -515,7 +540,8 @@ def gated_norm_quant(o, z, xs, w, eps, H=48, D=128):
     assert z.stride(1) == 1
     q = torch.empty((T, H * D), dtype=FP8, device=o.device)
     s = torch.empty((T,), dtype=torch.float32, device=o.device)
-    _gated_norm_quant_kernel[(T,)](o, z, xs, w, q, s, eps, z.stride(0), H=H, D=D, BH=triton.next_power_of_2(H), num_warps=8)
+    _gated_norm_quant_kernel[(T,)](o, z, xs, w, q, s, eps, z.stride(0), H=H, D=D, BH=triton.next_power_of_2(H), num_warps=8,
+                                   launch_pdl=PDL)
     return q, s
 
 
@@ -527,6 +553,7 @@ def _qkv_prep_kernel(qr_ptr, kr_ptr, vr_ptr, xs_ptr, pos_ptr, slot_map, qn_ptr, 
     """One program per (token, head) over HQ query + HKV key + HKV value heads. q_raw rows are [HQ, 2D]
     (query | output gate per head). Query/key: RMSNorm(1 + w) over D, RoPE on the first R dims (rotate-half),
     query -> q_out, key -> paged k cache; value -> paged v cache."""
+    gdc_wait()
     t = tl.program_id(0).to(tl.int64)
     h = tl.program_id(1)
     xs = tl.load(xs_ptr + t)
@@ -574,7 +601,8 @@ def qkv_prep(q_raw, k_raw, v_raw, xs, pos, slot_map, qn_w1, kn_w1, k_cache, v_ca
     q = torch.empty((T, HQ, D), dtype=torch.bfloat16, device=q_raw.device)
     import math
     _qkv_prep_kernel[(T, HQ + 2 * HKV)](q_raw, k_raw, v_raw, xs, pos, slot_map, qn_w1, kn_w1, q, k_cache, v_cache,
-                                        eps, math.log2(theta), q_raw.stride(0), k_raw.stride(0), HQ=HQ, HKV=HKV, D=D, R=R, num_warps=2)
+                                        eps, math.log2(theta), q_raw.stride(0), k_raw.stride(0), HQ=HQ, HKV=HKV, D=D, R=R, num_warps=2,
+                                        launch_pdl=PDL)
     return q
 
 
@@ -587,6 +615,7 @@ def _attn_decode_kernel(q_ptr, k_cache, v_cache, block_table, row_slot, pos_ptr,
     contiguous share of the sequence's paged KV (positions [0, pos]). Rows row0 + program_id(0); rows with
     row_slot < 0 are skipped. NSPLIT == 1: writes o; else the split's normalized partial output and log2-sum-exp
     (combined by _attn_decode_combine_kernel)."""
+    gdc_wait()
     i = tl.program_id(0)
     r = tl.load(row0_ptr).to(tl.int64) + i
     h = tl.program_id(1)
@@ -636,6 +665,7 @@ def _attn_decode_kernel(q_ptr, k_cache, v_cache, block_table, row_slot, pos_ptr,
 @triton.jit
 def _attn_decode_combine_kernel(po_ptr, plse_ptr, row_slot, row0_ptr, o_ptr, HQ: tl.constexpr, D: tl.constexpr,
                                 NSPLIT: tl.constexpr):
+    gdc_wait()
     i = tl.program_id(0)
     r = tl.load(row0_ptr).to(tl.int64) + i
     hq = tl.program_id(1)
@@ -658,6 +688,7 @@ def _attn_prefill_kernel(q_ptr, k_cache, v_cache, block_table, tile_tok0, tile_n
     """One program per (query tile, kv head). A tile = up to TQ consecutive tokens of one sequence (rows = token x
     query head of the group), causal over the sequence's paged KV. KV blocks entirely below the tile's first
     position need no mask; the last tiles of the list (longest contexts) run first."""
+    gdc_wait()
     tile = n_tiles - 1 - tl.program_id(0)
     h = tl.program_id(1)
     G: tl.constexpr = HQ // HKV
@@ -723,9 +754,10 @@ def attn_decode(q, k_cache, v_cache, block_table, row_slot, pos, row0, n_rows, o
         po = plse = o
     _attn_decode_kernel[(n_rows, HKV, ns)](q, k_cache, v_cache, block_table, row_slot, pos, row0, o, po, plse,
                                            D ** -0.5, block_table.shape[1], HQ=HQ, HKV=HKV, D=D, BS=BS, BLOCK_M=16,
-                                           NSPLIT=ns, num_warps=4, num_stages=2)
+                                           NSPLIT=ns, num_warps=4, num_stages=2, launch_pdl=PDL)
     if ns > 1:
-        _attn_decode_combine_kernel[(n_rows, HQ)](po, plse, row_slot, row0, o, HQ=HQ, D=D, NSPLIT=ns, num_warps=4)
+        _attn_decode_combine_kernel[(n_rows, HQ)](po, plse, row_slot, row0, o, HQ=HQ, D=D, NSPLIT=ns, num_warps=4,
+                                                  launch_pdl=PDL)
     return o
 
 
@@ -739,7 +771,7 @@ def attn_prefill(q, k_cache, v_cache, block_table, tile_tok0, tile_ntok, tile_po
     _attn_prefill_kernel[(n_tiles, HKV)](q, k_cache, v_cache, block_table, tile_tok0, tile_ntok, tile_pos0,
                                          tile_slot, o, D ** -0.5, block_table.shape[1], n_tiles, HQ=HQ, HKV=HKV,
                                          D=D, BS=BS, BLOCK_M=c["BLOCK_M"], TQ=c["BLOCK_M"] // (HQ // HKV),
-                                         num_warps=c["num_warps"], num_stages=c["num_stages"])
+                                         num_warps=c["num_warps"], num_stages=c["num_stages"], launch_pdl=PDL)
     return o
 
 
@@ -747,6 +779,7 @@ def attn_prefill(q, k_cache, v_cache, block_table, tile_tok0, tile_ntok, tile_po
 @triton.jit
 def _attn_gate_quant_kernel(o_ptr, qr_ptr, xs_ptr, q_ptr, s_ptr, QS, H: tl.constexpr, D: tl.constexpr,
                             BH: tl.constexpr):
+    gdc_wait()
     row = tl.program_id(0).to(tl.int64)
     h = tl.arange(0, BH)
     d = tl.arange(0, D)
@@ -765,5 +798,6 @@ def attn_gate_quant(o, q_raw, xs, H=24, D=256):
     T = o.shape[0]
     q = torch.empty((T, H * D), dtype=FP8, device=o.device)
     s = torch.empty((T,), dtype=torch.float32, device=o.device)
-    _attn_gate_quant_kernel[(T,)](o, q_raw, xs, q, s, q_raw.stride(0), H=H, D=D, BH=triton.next_power_of_2(H), num_warps=8)
+    _attn_gate_quant_kernel[(T,)](o, q_raw, xs, q, s, q_raw.stride(0), H=H, D=D, BH=triton.next_power_of_2(H), num_warps=8,
+                                  launch_pdl=PDL)
     return q, s
