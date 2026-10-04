@@ -2,5 +2,6 @@
 
 Each entry: profile evidence → Amdahl estimate → change → measured result → decision.
 
-| stage | change | makespan (s) | speedup vs base | accuracy | notes |
-|---|---|---|---|---|---|
+## Summary
+| stage | phase | change | decode ms/tok (warm, ctx 1024) | makespan (s) | speedup vs base | accuracy | notes |
+|---|---|---|---|---|---|---|---|

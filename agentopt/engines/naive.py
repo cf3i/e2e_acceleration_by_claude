@@ -18,8 +18,9 @@ class NaiveEngine:
         self.stop_ids = {self.tok.convert_tokens_to_ids("<|im_end|>"), self.tok.convert_tokens_to_ids("<|endoftext|>")}
 
     @torch.inference_mode()
-    def generate(self, input_ids: list[int], max_new_tokens: int, timer):
+    def generate(self, input_ids: list[int], max_new_tokens: int, timer, ignore_eos: bool = False):
         """Returns (generated token ids without the stop token, stats dict)."""
+        stop_ids = set() if ignore_eos else self.stop_ids
         ids = torch.tensor([input_ids], device=self.device)
         with timer("prefill") as t_pre:
             out = self.model(input_ids=ids, use_cache=True, logits_to_keep=1)
@@ -27,14 +28,14 @@ class NaiveEngine:
             next_id = int(out.logits[0, -1].argmax())
         gen = [next_id]
         with timer("decode") as t_dec:
-            while next_id not in self.stop_ids and len(gen) < max_new_tokens:
+            while next_id not in stop_ids and len(gen) < max_new_tokens:
                 out = self.model(
                     input_ids=torch.tensor([[next_id]], device=self.device), past_key_values=past, use_cache=True
                 )
                 past = out.past_key_values
                 next_id = int(out.logits[0, -1].argmax())
                 gen.append(next_id)
-        stopped = gen[-1] in self.stop_ids
+        stopped = gen[-1] in stop_ids
         if stopped:
             gen = gen[:-1]
         return gen, {"prefill_s": t_pre.elapsed, "decode_s": t_dec.elapsed, "stopped": stopped}
