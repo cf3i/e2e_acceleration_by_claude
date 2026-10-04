@@ -4,6 +4,11 @@ StaticCache: KV for the 16 full-attention layers is allocated once at `max_cache
 (the write position is a device tensor), the Gated-DeltaNet conv/recurrent states are fixed-size and updated
 in place. Every tensor address is stable across tokens and across requests, which is what CUDA graphs need.
 
+Attention mask: with a StaticCache the full-attention layers see all `max_cache_len` KV slots. For a single
+query token HF skips building a mask (it assumes the KV holds only real tokens), which would let decode attend
+to unfilled slots. So decode passes an explicit 4D bool mask (used as-is by HF) kept in a static buffer that the
+step itself extends by one position. Prefill (q_len = n < max_cache_len) gets a correct causal mask from HF.
+
 CUDA graph: one decode step = model forward + argmax + "feed the token back" + "advance the position", all
 recorded once and replayed per token, so the ~thousands of kernel launches and all Python/HF dispatch for the
 64 layers become one `graph.replay()`. The host still reads the token each step for the stop check.
@@ -24,13 +29,16 @@ class StaticEngine(NaiveEngine):
         self.tok_buf = torch.zeros((1, 1), dtype=torch.long, device=self.device)
         self.pos_buf = torch.zeros((1,), dtype=torch.long, device=self.device)
         self.next_buf = torch.zeros((1,), dtype=torch.long, device=self.device)
+        self.mask_buf = torch.zeros((1, 1, 1, max_cache_len), dtype=torch.bool, device=self.device)
         self.graph = None
         if cuda_graph:
             self._capture()
 
     def _step(self):
-        """One decode step on the static buffers; leaves tok_buf/pos_buf ready for the next step."""
-        out = self.model(input_ids=self.tok_buf, past_key_values=self.cache, cache_position=self.pos_buf,
+        """One decode step on the static buffers; leaves tok_buf/pos_buf/mask_buf ready for the next step.
+        (The model takes positions from the cache's device-side length; pos_buf mirrors it for the mask.)"""
+        self.mask_buf.index_fill_(-1, self.pos_buf, True)
+        out = self.model(input_ids=self.tok_buf, attention_mask=self.mask_buf, past_key_values=self.cache,
                          use_cache=True)
         self.next_buf.copy_(out.logits[0, -1].argmax().view(1))
         self.tok_buf.copy_(self.next_buf.view(1, 1))
@@ -57,9 +65,10 @@ class StaticEngine(NaiveEngine):
         self.cache.reset()
         n = len(input_ids)
         ids = torch.tensor([input_ids], device=self.device)
-        out = self.model(input_ids=ids, past_key_values=self.cache, use_cache=True, logits_to_keep=1,
-                         cache_position=torch.arange(n, device=self.device))
+        out = self.model(input_ids=ids, past_key_values=self.cache, use_cache=True, logits_to_keep=1)
         next_id = out.logits[0, -1].argmax()
+        self.mask_buf.zero_()
+        self.mask_buf[..., :n] = True
         self.tok_buf.copy_(next_id.view(1, 1))
         self.pos_buf.fill_(n)
         return int(next_id)
