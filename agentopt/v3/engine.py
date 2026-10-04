@@ -125,6 +125,15 @@ class V3Engine:
     def reset_stats(self):
         self.stats = collections.Counter()
         self.trace = []
+        self.trace_ev = []  # (start, end) CUDA events of every launched step
+
+    def gpu_times(self):
+        """GPU (start, end) of every traced step in seconds, relative to the first step's start."""
+        if not self.trace_ev:
+            return []
+        torch.cuda.synchronize()
+        e0 = self.trace_ev[0][0]
+        return [(e0.elapsed_time(a) / 1e3, e0.elapsed_time(b) / 1e3) for a, b in self.trace_ev]
 
     # ------------------------------------------------------------------ KV blocks
     def _alloc(self, s: Session, n_tokens: int, updates: list):
@@ -152,6 +161,10 @@ class V3Engine:
 
     def can_admit(self, n_tokens: int, max_new: int = 512) -> bool:
         return self.kv_free_tokens() >= n_tokens + max_new
+
+    def prefill_backlog(self) -> int:
+        """Prompt tokens submitted but not yet fed."""
+        return sum(len(s.todo) for s in self.sessions.values() if s.phase == PREFILL)
 
     def room(self, n_tokens: int) -> int:
         return self.max_blocks * self.BS - n_tokens - 1
@@ -349,6 +362,8 @@ class V3Engine:
         launched = self._launch()
         out, done = self._collect()
         self.inflight = launched
+        if launched is not None:
+            self.trace[-1] += (time.perf_counter(),)
         return out, done
 
     def drain(self):
@@ -379,6 +394,8 @@ class V3Engine:
         if ev is not None:
             ev.synchronize()  # the H2D copy that last used this pinned buffer has run
         samples = self._fill(h.numpy(), lay, dec, pre)
+        ev0 = torch.cuda.Event(enable_timing=True)
+        ev0.record()
         self._apply_updates(updates)
         self.meta_dev[:lay.size].copy_(h[:lay.size], non_blocking=True)
         g = self.graphs.get((lay.T, lay.npre))
@@ -395,8 +412,9 @@ class V3Engine:
         oh = self.out_host[self.flip]
         n = len(samples)
         oh[:n].copy_(nxt[:n], non_blocking=True)
-        ev2 = torch.cuda.Event()
+        ev2 = torch.cuda.Event(enable_timing=True)
         ev2.record()
+        self.trace_ev.append((ev0, ev2))
         self.flip ^= 1
         self.stats["steps"] += 1
         self.stats["decode_rows"] += D

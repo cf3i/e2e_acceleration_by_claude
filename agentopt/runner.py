@@ -11,6 +11,7 @@ continuous_async -- same, but tool calls run in a thread pool: the agent's slot 
 import collections
 import concurrent.futures as cf
 import functools
+import os
 import time
 
 from .agent import AgentState
@@ -149,11 +150,53 @@ def run_continuous(engine, tasks, timer, max_new_tokens: int = 512, max_turns: i
     return results, turns
 
 
+class PromptEncoder:
+    """Tokenizes an agent's prompt incrementally: the rendered conversation of turn k+1 extends the one of turn k,
+    so only the text after the last common special token is encoded (text is split at special tokens before BPE,
+    so the tokens before such a cut are unchanged). AGENTOPT_CHECK_TOK=1 compares with a full encode."""
+
+    def __init__(self, tok, sep="<|im_end|>"):
+        self.tok, self.sep = tok, sep
+        self.sep_id = tok.convert_tokens_to_ids(sep)
+        self.check = os.environ.get("AGENTOPT_CHECK_TOK") == "1"
+        self.cache = {}  # id(agent state) -> (text, ids)
+
+    def __call__(self, st):
+        text = st.prompt_text(self.tok)
+        ids = None
+        prev = self.cache.get(id(st))
+        if prev is not None and prev[2] is st:
+            ptext, pids, _ = prev
+            p = ptext.rfind(self.sep)
+            while p >= 0 and not text.startswith(ptext[:p + len(self.sep)]):
+                p = ptext.rfind(self.sep, 0, p)
+            if p >= 0:
+                cut = p + len(self.sep)
+                n = ptext.count(self.sep, 0, cut)
+                k = [i for i, t in enumerate(pids) if t == self.sep_id][n - 1] + 1
+                ids = pids[:k] + self.tok.encode(text[cut:], add_special_tokens=False)
+        if ids is None:
+            ids = self.tok.encode(text, add_special_tokens=False)
+        if self.check:
+            assert ids == self.tok.encode(text, add_special_tokens=False), "incremental tokenization mismatch"
+        self.cache[id(st)] = (text, ids, st)
+        return ids
+
+    def forget(self, st):
+        self.cache.pop(id(st), None)
+
+
 def run_v3(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6, tool_workers: int = 8):
     """Phase 3 (V3Engine): turns are submitted without blocking; every `step()` runs one mixed forward (decode
     rows + prefill chunks) and returns the tokens of the previous step plus the slots whose turn ended. Tool calls
-    run in a thread pool. New tasks are admitted while a slot is free and the KV cache can take them."""
+    run in a thread pool. New tasks are admitted while a slot is free, the KV cache can take them and the prefill
+    backlog is under two steps' token budget (more cannot be fed sooner; tokenizing prompts early would only delay
+    the next step)."""
     tok = engine.tok
+    encode = PromptEncoder(tok)
+    # sections must not synchronize the device: the engine keeps one step in flight while the CPU works (a sync
+    # at the end of every step() would leave the GPU idle during the next step's scheduling and the CPU work)
+    timer.sync = False
     pool = cf.ThreadPoolExecutor(tool_workers)
     pending = {}  # future -> (slot, agent state, t_task, turn record)
     queue, free = collections.deque(tasks), list(range(engine.num_slots))[::-1]
@@ -169,7 +212,7 @@ def run_v3(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6, 
     def start_turn(slot, st, t_task, ids=None):
         if ids is None:
             with timer("template"):
-                ids = tok.encode(st.prompt_text(tok), add_special_tokens=False)
+                ids = encode(st)
         limit = min(max_new_tokens, engine.room(len(ids)))
         engine.submit(slot, ids, limit)
         live[slot] = {"st": st, "t_task": t_task, "ids": ids, "gen": [], "t0": time.perf_counter(), "decode_s": 0.0}
@@ -192,6 +235,7 @@ def run_v3(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6, 
             return
         engine.release(slot)
         free.append(slot)
+        encode.forget(st)
         results.append({
             "task_id": st.task["id"], "gold": st.task["answer"], "pred": st.answer, "correct": st.correct,
             "turns": st.turns, "tool_calls": st.tool_calls, "finish_reason": st.finish_reason,
@@ -208,11 +252,11 @@ def run_v3(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6, 
     while queue or live or pending:
         if pending:
             collect([f for f in list(pending) if f.done()])
-        while free and queue:
+        while free and queue and engine.prefill_backlog() < 2 * engine.TB:
             if nxt is None:
                 st = AgentState(queue[0], max_turns=max_turns)
                 with timer("template"):
-                    nxt = (st, tok.encode(st.prompt_text(tok), add_special_tokens=False))
+                    nxt = (st, encode(st))
             if not engine.can_admit(len(nxt[1]), max_new_tokens):
                 break
             queue.popleft()

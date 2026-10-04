@@ -123,7 +123,12 @@ def main():
         m["breakdown"] = timer.breakdown(makespan)
         if hasattr(engine, "stats"):
             m["engine_stats"] = dict(engine.stats)
-        m["trace"] = [(a - t0, b - t0, *rest) for a, b, *rest in getattr(engine, "trace", [])]
+        m["trace"] = [(a - t0, b - t0, *rest[:3], *(x - t0 for x in rest[3:]))
+                      for a, b, *rest in getattr(engine, "trace", [])]
+        if hasattr(engine, "gpu_times"):  # GPU busy time of the steps vs the makespan (the rest: GPU idle)
+            g = engine.gpu_times()
+            m["gpu_busy_s"] = sum(b - a for a, b in g)
+            m["trace"] = [(*t[:5], a, b, *t[5:]) for t, (a, b) in zip(m["trace"], g)]
         reps.append((m, results, turns))
         print(f"[rep {r}] makespan={makespan:.1f}s acc={m['accuracy']:.3f} "
               f"gen_tok={m['gen_tokens']} decode={m['decode_ms_per_token']:.2f}ms/tok", flush=True)
@@ -148,7 +153,7 @@ def main():
     if m["trace"]:  # median rep's decode steps, times relative to the start of the run
         with open(out / "steps.jsonl", "w") as f:
             for t in m["trace"]:
-                f.write(json.dumps(dict(zip(("t0", "t1", "bucket", "live", "forcing"), t))) + "\n")
+                f.write(json.dumps(dict(zip(("t0", "t1", "bucket", "live", "forcing", "g0", "g1", "t2"), t))) + "\n")
     with open(out / "transcripts.jsonl", "w") as f:
         for r in results:
             f.write(json.dumps(r) + "\n")
