@@ -23,6 +23,7 @@ token that CPU time is not overlapped with GPU work. With `async_readback` the e
 waiting for token k (copied to pinned host memory + event), so launch overlaps execution. When token k is a stop
 token, the already-queued step k+1 is simply discarded (the next request starts with a fresh prefill).
 """
+import os
 import time
 
 import torch
@@ -40,6 +41,11 @@ class StaticEngine(NaiveEngine):
                             async_readback=async_readback, compile_decode=compile_decode)
         self.decode_model = self.model
         if compile_decode:
+            # Inductor points an unset TRITON_CACHE_DIR at node-local /tmp, so every fla Triton kernel JIT-ed
+            # afterwards (e.g. a new prefill length bucket) would miss the shared cache and re-autotune (13 s).
+            # Pin both caches to persistent dirs; the inductor FX/kernel cache also skips recompiles across jobs.
+            os.environ.setdefault("TRITON_CACHE_DIR", os.path.expanduser("~/.triton/cache"))
+            os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", os.path.expanduser("~/.cache/torchinductor"))
             # 64 layers x graph breaks -> many (code object, guard) entries; the default limit (8) would
             # silently fall back to eager for most layers.
             torch._dynamo.config.cache_size_limit = 1024

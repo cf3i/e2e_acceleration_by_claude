@@ -1,0 +1,80 @@
+{
+  "ref": "p1_s05",
+  "ref_seconds": 33.88329629600048,
+  "num_prompts": 8,
+  "candidates": {
+    "p1_s06": {
+      "seconds": 27.541827844455838,
+      "identical": 7,
+      "rows": [
+        {
+          "identical": false,
+          "first_divergence": 14,
+          "ref_len": 107,
+          "cand_len": 102
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 85,
+          "cand_len": 85
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 64,
+          "cand_len": 64
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 221,
+          "cand_len": 221
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 169,
+          "cand_len": 169
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 135,
+          "cand_len": 135
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 176,
+          "cand_len": 176
+        },
+        {
+          "identical": true,
+          "first_divergence": null,
+          "ref_len": 87,
+          "cand_len": 87
+        }
+      ]
+    }
+  },
+  "env": {
+    "host": "orix-worker-h100-5",
+    "slurm_job_id": "297169",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.5.4",
+    "git_commit": "751271eddd625197168f8fb4f401279ce9f41709",
+    "snapshot": true,
+    "git_dirty": false,
+    "argv": [
+      "bench/check_equiv.py",
+      "--stage",
+      "p1_s06_compile",
+      "--ref",
+      "p1_s05",
+      "--cand",
+      "p1_s06"
+    ]
+  }
+}
