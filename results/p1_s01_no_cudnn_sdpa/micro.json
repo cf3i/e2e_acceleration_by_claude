@@ -1,0 +1,55 @@
+{
+  "stage": "p1_s01_no_cudnn_sdpa",
+  "engine": "p1_s01",
+  "decode_tokens": 128,
+  "reps": 3,
+  "weight_gb": 53.791996928,
+  "decode_floor_ms_per_tok": 16.057312515820897,
+  "peak_mem_gb": 50.965277671813965,
+  "rows": [
+    {
+      "ctx": 512,
+      "prefill_ms_cold": 942.8810440003872,
+      "prefill_ms_warm": 341.649416834116,
+      "decode_ms_per_tok_cold": 56.109723451686655,
+      "decode_ms_per_tok_warm": 56.08381025903807,
+      "prefill_tok_per_s_warm": 1498.6122462740682,
+      "decode_bw_roofline_frac": 0.28630922973414086
+    },
+    {
+      "ctx": 1024,
+      "prefill_ms_cold": 431.42181634902954,
+      "prefill_ms_warm": 412.3046286404133,
+      "decode_ms_per_tok_cold": 59.399965461196864,
+      "decode_ms_per_tok_warm": 59.865362590222844,
+      "prefill_tok_per_s_warm": 2483.6005440362633,
+      "decode_bw_roofline_frac": 0.26822375779685603
+    },
+    {
+      "ctx": 2048,
+      "prefill_ms_cold": 885.6861535459757,
+      "prefill_ms_warm": 669.8887385427952,
+      "decode_ms_per_tok_cold": 59.4765735335472,
+      "decode_ms_per_tok_warm": 56.990659157708876,
+      "prefill_tok_per_s_warm": 3057.224106282189,
+      "decode_bw_roofline_frac": 0.2817534092979322
+    }
+  ],
+  "env": {
+    "host": "orix-worker-h100-5",
+    "slurm_job_id": "297073",
+    "gpu": "NVIDIA H100 80GB HBM3",
+    "torch": "2.11.0+cu128",
+    "transformers": "5.5.4",
+    "git_commit": "4684213497b1472bc421644d4353cc35a488de90",
+    "snapshot": true,
+    "git_dirty": false,
+    "argv": [
+      "bench/microbench.py",
+      "--stage",
+      "p1_s01_no_cudnn_sdpa",
+      "--engine",
+      "p1_s01"
+    ]
+  }
+}

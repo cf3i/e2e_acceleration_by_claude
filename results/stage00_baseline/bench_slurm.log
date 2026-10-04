@@ -1,0 +1,51 @@
+The fast path is not available because one of the required library is not installed. Falling back to torch implementation. To install follow https://github.com/fla-org/flash-linear-attention#installation and https://github.com/Dao-AILab/causal-conv1d
+Loading weights:   0%|          | 0/851 [00:00<?, ?it/s]Loading weights:   5%|▍         | 40/851 [00:00<00:02, 334.28it/s]Loading weights:   9%|▊         | 74/851 [00:00<00:02, 330.29it/s]Loading weights:  13%|█▎        | 108/851 [00:00<00:02, 313.76it/s]Loading weights:  17%|█▋        | 142/851 [00:00<00:02, 315.34it/s]Loading weights:  20%|██        | 174/851 [00:00<00:02, 282.58it/s]Loading weights:  25%|██▌       | 216/851 [00:00<00:02, 304.66it/s]Loading weights:  30%|██▉       | 252/851 [00:00<00:01, 317.47it/s]Loading weights:  34%|███▍      | 290/851 [00:00<00:01, 331.94it/s]Loading weights:  38%|███▊      | 324/851 [00:01<00:01, 302.25it/s]Loading weights:  42%|████▏     | 355/851 [00:01<00:01, 289.63it/s]Loading weights:  47%|████▋     | 398/851 [00:01<00:01, 322.29it/s]Loading weights:  51%|█████     | 431/851 [00:01<00:01, 317.25it/s]Loading weights:  55%|█████▍    | 464/851 [00:01<00:01, 304.64it/s]Loading weights:  59%|█████▉    | 502/851 [00:01<00:01, 315.69it/s]Loading weights:  63%|██████▎   | 540/851 [00:01<00:00, 329.24it/s]Loading weights:  67%|██████▋   | 574/851 [00:01<00:00, 311.23it/s]Loading weights:  71%|███████   | 606/851 [00:01<00:00, 313.38it/s]Loading weights:  75%|███████▍  | 638/851 [00:02<00:00, 310.83it/s]Loading weights:  79%|███████▊  | 670/851 [00:02<00:00, 290.27it/s]Loading weights:  83%|████████▎ | 709/851 [00:02<00:00, 302.36it/s]Loading weights:  88%|████████▊ | 746/851 [00:02<00:00, 314.91it/s]Loading weights:  91%|█████████▏| 778/851 [00:02<00:00, 311.88it/s]Loading weights:  95%|█████████▌| 810/851 [00:02<00:00, 305.13it/s]Loading weights: 100%|██████████| 851/851 [00:02<00:00, 317.48it/s]
+engine loaded in 46.5s
+[rep 0] makespan=1673.6s acc=0.930 gen_tok=20520 decode=71.84ms/tok
+{
+  "stage": "stage00_baseline",
+  "engine": "naive",
+  "engine_options": {
+    "linear_attn_fast_path": false
+  },
+  "runner": "serial",
+  "config": {
+    "engine": "naive",
+    "runner": "serial",
+    "num_tasks": 128,
+    "repeats": 1,
+    "max_new_tokens": 512,
+    "max_turns": 6,
+    "device": "cuda"
+  },
+  "load_s": 46.549843003973365,
+  "makespan_s_all": [
+    1673.6415455192327
+  ],
+  "makespan_s": 1673.6415455192327,
+  "tasks": 128,
+  "accuracy": 0.9296875,
+  "tasks_per_min": 4.588796221366115,
+  "turns": 254,
+  "tool_calls": 126,
+  "gen_tokens": 20520,
+  "prompt_tokens": 126192,
+  "redundant_prefill_tokens": 68884,
+  "gen_tok_per_s_e2e": 12.26068990396259,
+  "decode_ms_per_token": 71.83655268497685,
+  "prefill_tok_per_s": 611.3184015344211,
+  "task_latency_p50_s": 9.740726854652166,
+  "task_latency_p90_s": 16.97265631891787,
+  "finish_reasons": {
+    "no_answer": 4,
+    "answer": 124
+  },
+  "peak_mem_gb": 50.54317760467529
+}
+breakdown (median rep):
+  decode         1455.84s   87.0%  n=254
+  prefill         206.43s   12.3%  n=254
+  tool             10.74s    0.6%  n=126
+  template          0.47s    0.0%  n=254
+  other             0.13s    0.0%  n=0
+  detokenize        0.04s    0.0%  n=254

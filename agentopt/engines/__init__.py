@@ -3,6 +3,8 @@
 PRESETS = {
     "naive": {},                                     # stage00_baseline
     "p1_s01": {"cudnn_sdpa": False},                 # avoid per-shape cuDNN SDPA plan building
+    "p1_s02": {"cudnn_sdpa": False,                  # + fla / causal-conv1d kernels for Gated-DeltaNet layers
+               "linear_attn_fast_path": True},
 }
 
 
