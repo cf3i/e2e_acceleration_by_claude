@@ -459,7 +459,7 @@ def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows,
 # A = (I + X)^-1, X = strictly-lower(beta_i k_i.k_j exp2(g_i - g_j)) per 64-token chunk and value head (fla's
 # kkt + solve_tril), with all of the inversion on tensor cores: 16 x 16 diagonal blocks by (I + Y)^-1 =
 # (I - Y)(I + Y^2)(I + Y^4)(I + Y^8) (Y nilpotent), then block merges, tf32 like fla's merges. One program per chunk
-# and 3 value heads sharing one K head (k k^T computed once). Same error vs an fp64 inverse as fla (bf16 output
+# and HPP value heads sharing one K head (k k^T computed once, GDN_KKT_CFG). Same error vs an fp64 inverse as fla (bf16 output
 # rounding), 48 -> 18 us per layer for 2k tokens (scratch/kkt.py; fla: forward substitution, latency-bound).
 @triton.jit
 def _inv16(x, eye, PREC: tl.constexpr):
@@ -651,6 +651,12 @@ GDN_CHUNK_CFG = {"BV": 64, "num_warps": 4, "num_stages": 3}
 
 
 
+# (HPP, num_warps). In gdn_prefill (scratch/kkt_small.py) one head per program and 1 warp is best at every size:
+# small steps are one wave, so per-program latency decides (2 chunks: 20.7 us per layer vs 34 us with 3 heads per
+# program, fla 28 us), and at 2k tokens it is still ahead (132 vs 140 us) although kkt alone is faster with 3.
+GDN_KKT_CFG = (1, 1)
+
+
 def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, n_seqs,
                 scale=128 ** -0.5):
     """Chunked gated delta rule over varlen sequences in rows [0, cu_seqlens[-1]) of q/k [T, HK, DK],
@@ -664,8 +670,10 @@ def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, n_
     assert k.is_contiguous() and v.is_contiguous() and g.is_contiguous() and beta.is_contiguous()
     gc = torch.empty_like(g)
     A = torch.empty(T, HV, 64, device=k.device, dtype=k.dtype)
-    _gdn_kkt_kernel[(chunk_indices.shape[0], HV // 3)](k, g, gc, beta, A, cu_seqlens, chunk_indices, RCP_LN2, H=HK, HV=HV,
-                                                       K=DK, BT=64, HPP=3, PREC="tf32", num_warps=1, launch_pdl=PDL)
+    hpp, nw = GDN_KKT_CFG
+    _gdn_kkt_kernel[(chunk_indices.shape[0], HV // hpp)](k, g, gc, beta, A, cu_seqlens, chunk_indices, RCP_LN2, H=HK,
+                                                         HV=HV, K=DK, BT=64, HPP=hpp, PREC="tf32", num_warps=nw,
+                                                         launch_pdl=PDL)
     o = torch.empty_like(v)
     c = GDN_CHUNK_CFG
     _gdn_chunk_kernel[(DV // c["BV"], n_seqs * HV)](q, k, v, A, beta, gc, o, state, seq_slot, cu_seqlens, scale,
