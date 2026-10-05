@@ -679,7 +679,7 @@ GDN_KKT_CFG = (1, 1)
 
 
 def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, n_seqs,
-                scale=128 ** -0.5):
+                scale=128 ** -0.5, o=None):
     """Chunked gated delta rule over varlen sequences in rows [0, cu_seqlens[-1]) of q/k [T, HK, DK],
     v [T, HV, DV], g/beta fp32 [T, HV]; state [S, HV, DK, DV] bf16 indexed by seq_slot (updated in place).
     cu_seqlens [n_seqs + 1], chunk_indices [NT, 2] (int64, fixed sizes; padded
@@ -695,7 +695,8 @@ def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, n_
     _gdn_kkt_kernel[(chunk_indices.shape[0], HV // hpp)](k, g, gc, beta, A, cu_seqlens, chunk_indices, RCP_LN2, H=HK,
                                                          HV=HV, K=DK, BT=64, HPP=hpp, PREC="tf32", num_warps=nw,
                                                          launch_pdl=PDL)
-    o = torch.empty_like(v)
+    if o is None:
+        o = torch.empty_like(v)
     c = GDN_CHUNK_CFG
     _gdn_chunk_kernel[(DV // c["BV"], n_seqs * HV)](q, k, v, A, beta, gc, o, state, seq_slot, cu_seqlens, scale,
                                                    H=HK, HV=HV, K=DK, V=DV, BT=64, BV=c["BV"],

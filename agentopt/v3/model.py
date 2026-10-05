@@ -16,7 +16,9 @@ Weights: read straight from the checkpoint; every Linear of the decoder (not lm_
 per-tensor scale (amax / 448, computed like torchao's per-tensor recipe); activations quantized per token by the
 producing kernel (see kernels.py).
 """
+import contextlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,6 +30,12 @@ from . import kernels as K
 H, I = 5120, 17408
 HV, HK, DK, DV = 48, 16, 128, 128
 CONV_C = 2 * HK * DK + HV * DV  # 10240
+# Mixed steps: the prefill-row kernels (gdn kkt + chunk, attention prefill) and the decode-row kernels (gdn_decode,
+# attention decode) are independent (disjoint output rows, different state slots); "gdn" / "attn" run the prefill
+# ones on a side stream concurrently with the decode ones (parallel branches of the step's CUDA graph). Bit-exact;
+# small mixed steps (B=40, 40 prefill rows) 20.6 -> 20.0 ms; big ones are power-capped, the sections shorten but
+# the step does not (energy per step is the bound).
+OVERLAP = set(filter(None, os.environ.get("AGENTOPT_OVERLAP", "gdn,attn").split(",")))
 HQ, HKV, HD, ROT = 24, 4, 256, 64
 GROUPS = {"gate_up": ("mlp.", ["gate_proj", "up_proj"]),
           "gdn_in": ("linear_attn.", ["in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a"]),
@@ -72,6 +80,7 @@ class Model:
     def __init__(self, path: str, num_slots: int, block_size: int = 64, max_blocks_per_seq: int = 512,
                  device: str = "cuda"):
         self.path, self.dev = Path(path), device
+        self.side = torch.cuda.Stream(device, priority=-1)  # side stream of mixed steps (OVERLAP)
         cfg = json.loads((self.path / "config.json").read_text())["text_config"]
         self.eps = cfg["rms_norm_eps"]
         self.theta = cfg["rope_parameters"]["rope_theta"]
@@ -217,6 +226,17 @@ class Model:
         self.last_tok[b.sample_slot] = nxt
         return nxt
 
+    def _branch(self, kind):
+        """Context for the prefill-row kernels: on the side stream (forked from the current one) if kind overlaps."""
+        if kind not in OVERLAP:
+            return contextlib.nullcontext()
+        self.side.wait_stream(torch.cuda.current_stream())
+        return torch.cuda.stream(self.side)
+
+    def _join(self, kind, b: Step):
+        if kind in OVERLAP and b.npre:
+            torch.cuda.current_stream().wait_stream(self.side)
+
     def _gdn(self, L, li, xq, xs, b: Step, pre):
         qkv_raw, z_raw, b_raw, a_raw = self.mm_group(xq, L["gdn_in"])
         ns = b.seq_slot.shape[0]
@@ -225,13 +245,16 @@ class Model:
                                     b.seq_slot, b.seq_start, b.seq_len, ns)
             g, beta = K.gdn_gates(a_raw, b_raw, xs, L["A_log"], L["dt_bias"])
             cu, ci = pre
-            o = K.gdn_prefill(q, k, v, g, beta, self.rec[li], b.p_slot, cu, ci, b.npre + 1)
+            o = torch.empty((b.T, HV, DV), dtype=torch.bfloat16, device=self.dev)
+            with self._branch("gdn"):
+                K.gdn_prefill(q, k, v, g, beta, self.rec[li], b.p_slot, cu, ci, b.npre + 1, o=o)
         else:
             q, k, v = K.conv1d_varlen(qkv_raw, xs, L["conv_w"], self.conv[li], b.seq_slot, b.seq_start, b.seq_len,
                                       ns)
             o = torch.empty((b.T, HV, DV), dtype=torch.bfloat16, device=self.dev)
         K.gdn_decode(q, k, v, a_raw, b_raw, xs, L["A_log"], L["dt_bias"], self.rec[li], b.row_slot, b.row0, b.dmax,
                      o)
+        self._join("gdn", b)
         oq, os_ = K.gated_norm_quant(o, z_raw, xs, L["gnorm_w"], self.eps)
         return self.mm(oq, L["out_proj"]), os_
 
@@ -242,8 +265,10 @@ class Model:
         o = torch.empty((b.T, HQ, HD), dtype=torch.bfloat16, device=self.dev)
         if b.npre:
             t = b.tiles
-            K.attn_prefill(q, self.kc[ai], self.vc[ai], self.block_table, t[0], t[1], t[2], t[3], t.shape[1], o,
-                           self.BS)
+            with self._branch("attn"):
+                K.attn_prefill(q, self.kc[ai], self.vc[ai], self.block_table, t[0], t[1], t[2], t[3], t.shape[1], o,
+                               self.BS)
         K.attn_decode(q, self.kc[ai], self.vc[ai], self.block_table, b.row_slot, b.pos, b.row0, b.dmax, o, self.BS)
+        self._join("attn", b)
         oq, os_ = K.attn_gate_quant(o, q_raw, xs)
         return self.mm(oq, L["o_proj"]), os_
