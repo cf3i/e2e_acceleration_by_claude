@@ -322,17 +322,22 @@ def _conv1d_rows_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, ro
     come from the slot's conv state. Does not update the state (see _conv1d_state_kernel)."""
     gdc_wait()
     C: tl.constexpr = 2 * QK + VC
-    rows = tl.program_id(0) * BT + tl.arange(0, BT)
+    r0 = tl.program_id(0) * BT
+    rows = r0 + tl.arange(0, BT)
     rm = rows < T
     c0 = tl.program_id(1) * BLOCK_C
     offs = c0 + tl.arange(0, BLOCK_C)
-    start = tl.load(row_start + rows, mask=rm, other=0)
-    slot = tl.load(row_slot + rows, mask=rm, other=0).to(tl.int64)
-    # the state gather is expensive: only blocks holding one of the first 3 tokens of a sequence take that path
-    if tl.min(tl.where(rm, rows - start, 3)) < 3:
-        acc = _conv_taps(x_ptr, xs_ptr, w_ptr, state_ptr, rows, rm, offs, start, slot, XS, C, BT, BLOCK_C, True)
+    # the state gather is expensive: only blocks holding one of the first 3 tokens of a sequence take that path.
+    # A sequence's rows are contiguous, so first and last row sharing a start = one sequence (two scalar loads
+    # instead of a block reduction: -10%)
+    s0 = tl.load(row_start + r0)
+    s1 = tl.load(row_start + tl.minimum(r0 + BT, T) - 1)
+    if (s0 == s1) & (r0 - s0 >= 3):
+        acc = _conv_taps(x_ptr, xs_ptr, w_ptr, state_ptr, rows, rm, offs, s0, 0, XS, C, BT, BLOCK_C, False)
     else:
-        acc = _conv_taps(x_ptr, xs_ptr, w_ptr, state_ptr, rows, rm, offs, start, slot, XS, C, BT, BLOCK_C, False)
+        start = tl.load(row_start + rows, mask=rm, other=0)
+        slot = tl.load(row_slot + rows, mask=rm, other=0).to(tl.int64)
+        acc = _conv_taps(x_ptr, xs_ptr, w_ptr, state_ptr, rows, rm, offs, start, slot, XS, C, BT, BLOCK_C, True)
     _conv_out(acc, rows, rm, c0, q_out, k_out, v_out, QK, VC, BT, BLOCK_C, DK)
 
 
