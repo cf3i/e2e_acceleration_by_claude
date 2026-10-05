@@ -66,3 +66,10 @@ for e in ev[1:]:
 print("gaps (last step):")
 for k, (v, c) in sorted(gp.items(), key=lambda x: -x[1][0])[:15]:
     print(f"  {v / 1e3:6.3f} ms  n {c:4d}  {k[0]} -> {k[1]}")
+# raw kernel durations (last step): PDL kernels start early and spin in gdc_wait, so this includes that wait
+raw = collections.defaultdict(list)
+for e in ev:
+    raw[short(e.name)].append(e.time_range.end - e.time_range.start)
+print("raw durations (last step), us:")
+for k2, v2 in sorted(raw.items(), key=lambda x: -sum(x[1]))[:14]:
+    print(f"  {k2:40s} n {len(v2):4d}  mean {sum(v2) / len(v2):7.1f}  total {sum(v2) / 1e3:7.3f} ms")

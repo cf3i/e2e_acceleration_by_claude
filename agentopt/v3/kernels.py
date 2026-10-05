@@ -609,11 +609,12 @@ def _gdn_kkt_kernel(k, g_raw, g, beta, A, cu_seqlens, chunk_indices, gscale, H: 
     if i_t * BT >= T:
         return
     if AQ:
-        # programs HV / HPP + [0, H): the chunk kernel's intra-chunk attention
-        if i_hg >= HV // HPP:
-            _gdn_aq(q, k, Aq, g_raw, a_raw, b_raw, xs_ptr, alog_ptr, dtb_ptr, AS, gscale, bos, T, i_t, i_hg - HV // HPP,
+        # programs [0, H): the chunk kernel's intra-chunk attention (first: the longer programs)
+        if i_hg < H:
+            _gdn_aq(q, k, Aq, g_raw, a_raw, b_raw, xs_ptr, alog_ptr, dtb_ptr, AS, gscale, bos, T, i_t, i_hg,
                     H, HV, K, BT, GATES)
             return
+        i_hg -= H
     BC: tl.constexpr = 16
     o_c = tl.arange(0, BC)
     t0 = i_t * BT + o_c
@@ -795,7 +796,8 @@ def _gdn_chunk_kernel(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale
 GDN_CHUNK_CFG = {"BV": 64, "num_warps": 4, "num_stages": 3}
 # intra-chunk attention tril(q k^T ...) by extra programs of the kkt launch (_gdn_aq) instead of on the chunk kernel's
 # warps (bit-exact): kkt + chunk 1992 tokens 149 -> 119 us, 4000 268 -> 231, 4 x 512 132 -> 115, 40 tokens 20.0 ->
-# 18.5 (scratch/gdnaq.py). As its own kernel after kkt: 130 us; computed by the kkt programs themselves: 170 us.
+# 18.5 (scratch/gdnaq.py; GATES mode 153 -> 121, scratch/gdnaq2.py, aq programs first in the grid: -4 us). As its own
+# kernel after kkt: 130 us; computed by the kkt programs themselves: 170 us.
 GDN_AQ = int(os.environ.get("AGENTOPT_GDN_AQ", "1"))
 # (Re-checked for the fused w / u version, scratch/gdnfuse.py: 1992 tokens 189 -> 160 us, 4000: 350 -> 289 us,
 # 4 x 512: 177 -> 142 us per layer including kkt_solve; num_stages 2 / 4, 8 warps and BV 32 are slower. Masking the
@@ -836,7 +838,7 @@ def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, n_
     aq = GDN_AQ
     Aq = torch.empty(T, HV, 64, device=k.device, dtype=k.dtype) if aq else A
     hpp, nw = GDN_KKT_CFG
-    _gdn_kkt_kernel[(chunk_indices.shape[0], HV // hpp + (HK if aq else 0))](
+    _gdn_kkt_kernel[(chunk_indices.shape[0], (HK if aq else 0) + HV // hpp)](
         k, g, gc, beta, A, cu_seqlens, chunk_indices, RCP_LN2, H=HK, HV=HV, K=DK, BT=64, HPP=hpp, PREC="tf32",
         num_warps=nw, launch_pdl=PDL, q=q, Aq=Aq, AQ=aq, **gx)
     if after_kkt is not None:
