@@ -37,6 +37,9 @@ CONV_C = 2 * HK * DK + HV * DV  # 10240
 # the step does not (energy per step is the bound).
 OVERLAP = set(filter(None, os.environ.get("AGENTOPT_OVERLAP", "gdn,attn").split(",")))
 CONV_FUSE = os.environ.get("AGENTOPT_CONV_FUSE", "1") != "0"
+# mixed steps with bucket >= this: gdn_decode starts after the prefill rows' kkt (see _gdn); replay A/B: longctx
+# -0.2%, but small buckets (127-task) +0.8%
+GDN_DEC_AFTER_KKT = int(os.environ.get("AGENTOPT_GDN_DEC_AFTER_KKT", "1024"))
 # prefill-row attention: FA3 (flash_attn_3 hopper build, hdim 256 paged; 1.35-1.5x our Triton kernel) if installed
 ATTN_FA3 = K.FA3 is not None and os.environ.get("AGENTOPT_ATTN_FA3", "1") != "0"
 # No cuBLASLt workspace: large-M FP8 GEMMs then use the same nvjet kernels with static tile scheduling instead of a
@@ -241,7 +244,8 @@ class Model:
         """Context for the prefill-row kernels: on the side stream (forked from the current one) if kind overlaps."""
         if kind not in OVERLAP:
             return contextlib.nullcontext()
-        self.side.wait_stream(torch.cuda.current_stream())
+        self.main = torch.cuda.current_stream()
+        self.side.wait_stream(self.main)
         return torch.cuda.stream(self.side)
 
     def _join(self, kind, b: Step):
@@ -260,12 +264,18 @@ class Model:
             o = torch.empty((b.T, HV, DV), dtype=torch.bfloat16, device=self.dev)
         elif b.npre:
             q, k, v = K.conv1d_rows(qkv_raw, xs, L["conv_w"], self.conv[li], b.row_start, b.row_seq_slot,
-                                    b.seq_slot, b.seq_start, b.seq_len, ns)
-            g, beta = K.gdn_gates(a_raw, b_raw, xs, L["A_log"], L["dt_bias"])
+                                    b.seq_slot, b.seq_start, b.seq_len, ns, update_state=False)
             cu, ci = pre
             o = torch.empty((b.T, HV, DV), dtype=torch.bfloat16, device=self.dev)
+            # big steps: the decode rows wait for kkt, so the prefill chain (kkt -> chunk) does not queue behind
+            # gdn_decode's CTAs (small steps: decode is the longer branch, start it at once)
+            wait = "gdn" in OVERLAP and b.T >= GDN_DEC_AFTER_KKT
             with self._branch("gdn"):
-                K.gdn_prefill(q, k, v, g, beta, self.rec[li], b.p_slot, cu, ci, b.npre + 1, o=o)
+                K.gdn_prefill(q, k, v, None, None, self.rec[li], b.p_slot, cu, ci, b.npre + 1, o=o,
+                              gates=(a_raw, b_raw, xs, L["A_log"], L["dt_bias"]),
+                              after_kkt=(lambda: self.main.wait_stream(self.side)) if wait else None)
+            # off the prefill chain: the new conv windows (all readers of the old ones were in conv1d_rows)
+            K.conv1d_state(qkv_raw, xs, self.conv[li], b.seq_slot, b.seq_start, b.seq_len, ns)
         else:
             q, k, v = K.conv1d_varlen(qkv_raw, xs, L["conv_w"], self.conv[li], b.seq_slot, b.seq_start, b.seq_len,
                                       ns)

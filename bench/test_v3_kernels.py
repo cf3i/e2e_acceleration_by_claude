@@ -209,8 +209,9 @@ qn_ = ref_conv_post(torch.randn(Tp, 10240, device=dev))
 pq = qn_[:, :2048].to(bf).reshape(Tp, HK, DK).contiguous()
 pk = qn_[:, 2048:4096].to(bf).reshape(Tp, HK, DK).contiguous()
 pv = torch.randn(Tp, HV, DV, device=dev, dtype=bf)
-pg, pb = K.gdn_gates(torch.randn(Tp, HV, device=dev, dtype=bf), torch.randn(Tp, HV, device=dev, dtype=bf),
-                     torch.ones(Tp, device=dev), A_log, dtb)
+ab_raw = torch.randn(Tp, 2 * HV + 5, device=dev, dtype=bf)  # strided like the GEMM outputs
+xs_p = torch.rand(Tp, device=dev) + 0.5
+pg, pb = K.gdn_gates(ab_raw[:, HV:2 * HV], ab_raw[:, :HV], xs_p, A_log, dtb)
 rec_p = (torch.randn(S + 1, HV, DK, DV, device=dev) * 0.1).to(bf)
 ci = [(i, t) for i, n in enumerate(lens_p) for t in range((n + 63) // 64)]
 ci += [(2, 0)] * 5  # padded chunk entries -> zero-length sequence
@@ -227,6 +228,11 @@ check("gdn_prefill o", po[:cu[-1]], ro[0], 2e-2, 2e-2)
 ref_recp = rec_p.clone()
 ref_recp[[slots_p[i] for i in real]] = rht.to(bf)
 check("gdn_prefill state", rec_p2, ref_recp, 1e-2, 1e-2)
+rec_p3 = rec_p.clone()
+po3 = K.gdn_prefill(pq, pk, pv, None, None, rec_p3, t32(slots_p), cu_t, ci_t, len(lens_p),
+                    gates=(ab_raw[:, HV:2 * HV], ab_raw[:, :HV], xs_p, A_log, dtb))
+check("gdn_prefill gates in kkt (bit-exact)", po3[:cu[-1]], po[:cu[-1]], 0.0)
+check("gdn_prefill gates in kkt state", rec_p3, rec_p2, 0.0)
 # correlated keys + slow decay (real chunks; random keys are nearly orthogonal and hide unstable inverses)
 pk_c = F.normalize(torch.randn(1, HK, DK, device=dev) + 0.3 * torch.randn(Tp, HK, DK, device=dev), dim=-1).to(bf)
 pg_c = -0.005 * torch.rand(Tp, HV, device=dev)

@@ -383,8 +383,10 @@ def conv1d_varlen(x, xs, w, state, seq_slot, seq_start, seq_len, n_seqs, HK=16, 
     return q, k, v
 
 
-def conv1d_rows(x, xs, w, state, row_start, row_slot, seq_slot, seq_start, seq_len, n_seqs, HK=16, DK=128):
-    """Token-parallel conv1d for steps with prefill chunks (any lengths); same result as conv1d_varlen."""
+def conv1d_rows(x, xs, w, state, row_start, row_slot, seq_slot, seq_start, seq_len, n_seqs, HK=16, DK=128,
+                update_state=True):
+    """Token-parallel conv1d for steps with prefill chunks (any lengths); same result as conv1d_varlen.
+    update_state=False: call conv1d_state afterwards (any time after this, before the next step's conv)."""
     T, C = x.shape
     assert x.stride(1) == 1
     q, k, v = _conv_outs(T, x.device)
@@ -392,9 +394,15 @@ def conv1d_rows(x, xs, w, state, row_start, row_slot, seq_slot, seq_start, seq_l
     _conv1d_rows_kernel[(triton.cdiv(T, BT), C // BLOCK_C)](x, xs, w, state, q, k, v, row_start, row_slot, T, x.stride(0),
                                                             QK=HK * DK, VC=C - 2 * HK * DK, BT=BT, BLOCK_C=BLOCK_C,
                                                             DK=DK, num_warps=4, launch_pdl=PDL)
+    if update_state:
+        conv1d_state(x, xs, state, seq_slot, seq_start, seq_len, n_seqs)
+    return q, k, v
+
+
+def conv1d_state(x, xs, state, seq_slot, seq_start, seq_len, n_seqs):
+    C = x.shape[1]
     _conv1d_state_kernel[(n_seqs, triton.cdiv(C, 1024))](x, xs, state, seq_slot, seq_start, seq_len, C, x.stride(0),
                                                          BLOCK_C=1024, num_warps=4, launch_pdl=PDL)
-    return q, k, v
 
 
 # ---------------------------------------------------------------- Gated-DeltaNet: gates
@@ -536,7 +544,8 @@ def _gx(kk, ga, gb, ba, ma, mb, STRICT: tl.constexpr, o_c):
 
 @triton.jit
 def _gdn_kkt_kernel(k, g_raw, g, beta, A, cu_seqlens, chunk_indices, gscale, H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr,
-               BT: tl.constexpr, HPP: tl.constexpr, PREC: tl.constexpr):
+               BT: tl.constexpr, HPP: tl.constexpr, PREC: tl.constexpr, a_raw=None, b_raw=None, xs_ptr=None,
+               alog_ptr=None, dtb_ptr=None, AS=0, GATES: tl.constexpr = 0):
     gdc_wait()
     i_t, i_hg = tl.program_id(0), tl.program_id(1)
     i_n = tl.load(chunk_indices + i_t * 2).to(tl.int32)
@@ -582,7 +591,20 @@ def _gdn_kkt_kernel(k, g_raw, g, beta, A, cu_seqlens, chunk_indices, gscale, H: 
         # chunk-local cumsum of the log2 gates (as fla's chunk_local_cumsum), stored for the chunk kernel and
         # re-read in 16-row pieces
         pg = (bos + o_t).to(tl.int64) * HV + hv0 + j
-        tl.store(g + pg, tl.cumsum(tl.load(g_raw + pg, mask=m_t, other=0.0), axis=0) * gscale, mask=m_t)
+        if GATES:
+            # the gates (as _gdn_gates_kernel) from the GEMM outputs a, b (/ xs): g = -exp(A_log) softplus(a + dt_bias),
+            # beta = sigmoid(b)
+            rr = (bos + o_t).to(tl.int64)
+            xsv = tl.load(xs_ptr + rr, mask=m_t, other=0.0)
+            ga = _rbf16(tl.load(a_raw + rr * AS + hv0 + j, mask=m_t, other=0.0).to(tl.float32) * xsv)
+            gb = _rbf16(tl.load(b_raw + rr * AS + hv0 + j, mask=m_t, other=0.0).to(tl.float32) * xsv)
+            gx = ga + tl.load(dtb_ptr + hv0 + j)
+            gr = -tl.exp(tl.load(alog_ptr + hv0 + j)) * tl.where(gx > 20.0, gx, tl.log(1.0 + tl.exp(gx)))
+            tl.store(beta + pg, tl.sigmoid(gb), mask=m_t)
+            gr = tl.where(m_t, gr, 0.0)
+        else:
+            gr = tl.load(g_raw + pg, mask=m_t, other=0.0)
+        tl.store(g + pg, tl.cumsum(gr, axis=0) * gscale, mask=m_t)
     tl.debug_barrier()
     for j in tl.static_range(HPP):
         hv = hv0 + j
@@ -726,22 +748,34 @@ GDN_KKT_CFG = (1, 1)
 
 
 def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, n_seqs,
-                scale=128 ** -0.5, o=None):
+                scale=128 ** -0.5, o=None, after_kkt=None, gates=None):
     """Chunked gated delta rule over varlen sequences in rows [0, cu_seqlens[-1]) of q/k [T, HK, DK],
     v [T, HV, DV], g/beta fp32 [T, HV]; state [S, HV, DK, DV] bf16 indexed by seq_slot (updated in place).
     cu_seqlens [n_seqs + 1], chunk_indices [NT, 2] (int64, fixed sizes; padded
     sequences have length 0, padded chunk entries point to a padded sequence). Returns o [T, HV, DV] (rows outside
-    the sequences are undefined)."""
+    the sequences are undefined). gates=(a, b, xs, A_log, dt_bias): g / beta computed in the kkt kernel from the GEMM
+    outputs (pass g = beta = None)."""
     from fla.ops.utils.constant import RCP_LN2
     T, HK, DK = k.shape
     HV, DV = v.shape[1], v.shape[2]
-    assert k.is_contiguous() and v.is_contiguous() and g.is_contiguous() and beta.is_contiguous()
-    gc = torch.empty_like(g)
+    assert k.is_contiguous() and v.is_contiguous()
+    gx = {}
+    if gates is not None:
+        a, b, xs, A_log, dt_bias = gates
+        assert a.stride(0) == b.stride(0) and a.stride(1) == b.stride(1) == 1
+        gc = torch.empty((T, HV), dtype=torch.float32, device=k.device)
+        beta = torch.empty_like(gc)
+        gx = dict(a_raw=a, b_raw=b, xs_ptr=xs, alog_ptr=A_log, dtb_ptr=dt_bias, AS=a.stride(0), GATES=1)
+    else:
+        assert g.is_contiguous() and beta.is_contiguous()
+        gc = torch.empty_like(g)
     A = torch.empty(T, HV, 64, device=k.device, dtype=k.dtype)
     hpp, nw = GDN_KKT_CFG
     _gdn_kkt_kernel[(chunk_indices.shape[0], HV // hpp)](k, g, gc, beta, A, cu_seqlens, chunk_indices, RCP_LN2, H=HK,
                                                          HV=HV, K=DK, BT=64, HPP=hpp, PREC="tf32", num_warps=nw,
-                                                         launch_pdl=PDL)
+                                                         launch_pdl=PDL, **gx)
+    if after_kkt is not None:
+        after_kkt()
     if o is None:
         o = torch.empty_like(v)
     c = GDN_CHUNK_CFG
