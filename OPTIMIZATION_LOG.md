@@ -305,3 +305,31 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
   (`scratch/accenv.sh`): both on 0.953 (the official run of the same commit: 0.937), FA3 off 0.953, conv fusion
   off 0.945, both off 0.961. Run-to-run spread of the same code is ±2 tasks (batch composition differs between
   nodes and runs), so longctx accuracy differences under ~0.02 are noise; only collapses (0b442cc) are signals.
+
+## Mixed-step critical path: cuBLASLt workspace, gdn ordering (b692a7c, 6892413)
+- Mixed 2048-bucket step (1992 prefill rows @3000 + 56 decode rows, `scratch/tl_mixed.py`), after both: span
+  ~110.8 ms = cuBLAS GEMMs ~75.3, FA3 6.1, silu 4.3, rmsnorm 4.0, gdn chunk 3.8, gdn_decode 3.1, attn_decode
+  2.9, conv_rows 2.7, kkt 2.35, gnorm 1.6 ms; the rest of the visible "gap" is profiler host time, not in-graph idle.
+- b692a7c: with the default workspace cuBLASLt picks dynamic-scheduler (`coopA`) nvjet kernels at large M and
+  puts a memset node before each GEMM in the graph; the memset breaks the PDL chain, ~7 us per GEMM.
+  `CUBLASLT_WORKSPACE_SIZE=0` gives static-schedule kernels, same or faster, bit-exact (`scratch/ws_exact.py`,
+  `memset*.py`). Replay A/B (2 rounds): 127-task 8.468 → 8.422 s, longctx 39.29 → 38.87 s (−1.1%).
+- 6892413: gdn gates (softplus/sigmoid of the a/b GEMM outputs) computed inside the kkt kernel's cumsum loop
+  (one launch less per layer); the conv state update split out of conv1d_rows and issued after the prefill
+  chain; for buckets ≥ 1024 gdn_decode on the main stream waits for the side stream's kkt (so it overlaps the
+  chunk kernel, not kkt + chunk). Bit-exact. Replay A/B vs b692a7c: longctx 38.86 → 38.68 s (−0.5%), 127-task
+  8.417 vs 8.410 (neutral). The decode-after-kkt ordering for all buckets costs +0.8% on the 127-task run
+  (small buckets: decode is the long branch there), hence the threshold.
+
+## GDN chunk kernel: chain floor and a producer/consumer split (negative)
+- The chunk kernel is a serial chain over 64-token chunks (h_{i+1} = decay·h_i + k^T v_new), 96 programs
+  (48 v-heads × 2 value blocks of BV 64) for one 1992-token sequence — latency-bound, not
+  bandwidth- or FLOP-bound. Isolated 1992 tokens: full kernel 106.8 us; chain only (no output o) 77.6 us
+  (BV 64) / 59.6 us (BV 32) (`scratch/gdnchain.py`). So at most ~30–45% of it is the off-chain output work.
+- Tried moving the output off the chain (`scratch/gdnpc.py`): 2×NP programs, roles by atomic ticket; producers
+  run the chain and publish h_i (bf16) + v_new with a release flag per chunk, consumers spin (acquire) and
+  compute o = q h_i + (qk^T ⊙ mask) v_new. Bit-exact at BV 64, but slower everywhere that matters:
+  1992 tokens 107.9 → 155.7 us, 4×512 88.2 → 133.7, 4000 198 → 294; publishing h one chunk late (so the store
+  is off the critical path) 149.5. Small batches equal. The h round trip through L2 (~50 MB per 1992 tokens)
+  and the co-resident consumers stealing issue slots from the producer cost more than the o work it removes.
+  Not adopted.
