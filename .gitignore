@@ -6,3 +6,4 @@ slurm/logs/
 results/**/torch_trace*.json
 runs/
 scratch/
+.claude/
