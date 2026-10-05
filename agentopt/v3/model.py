@@ -39,6 +39,11 @@ OVERLAP = set(filter(None, os.environ.get("AGENTOPT_OVERLAP", "gdn,attn").split(
 CONV_FUSE = os.environ.get("AGENTOPT_CONV_FUSE", "1") != "0"
 # prefill-row attention: FA3 (flash_attn_3 hopper build, hdim 256 paged; 1.35-1.5x our Triton kernel) if installed
 ATTN_FA3 = K.FA3 is not None and os.environ.get("AGENTOPT_ATTN_FA3", "1") != "0"
+# No cuBLASLt workspace: large-M FP8 GEMMs then use the same nvjet kernels with static tile scheduling instead of a
+# dynamic scheduler whose counter needs a memset node before every GEMM (the memset breaks the PDL chain: ~7 us of
+# gap per GEMM, ~3 ms per 2k-token step). Same speed or faster per GEMM, small-M kernels unchanged. Read by torch at
+# the first cuBLASLt call.
+os.environ.setdefault("CUBLASLT_WORKSPACE_SIZE", "0")
 HQ, HKV, HD, ROT = 24, 4, 256, 64
 GROUPS = {"gate_up": ("mlp.", ["gate_proj", "up_proj"]),
           "gdn_in": ("linear_attn.", ["in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a"]),
