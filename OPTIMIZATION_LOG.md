@@ -333,3 +333,22 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
   is off the critical path) 149.5. Small batches equal. The h round trip through L2 (~50 MB per 1992 tokens)
   and the co-resident consumers stealing issue slots from the producer cost more than the o work it removes.
   Not adopted.
+
+## Conv scalar test, GDN intra-chunk attention off the chain (c357466, 4f33408, 2bda9a1, c6ee482)
+- c357466: conv1d_rows decided "whole block in one sequence, ≥ 3 rows in" by a block min/max reduction; two
+  scalar loads (row_start of the first and last row) do the same. −10% on that kernel, bit-exact.
+- ncu of the chunk kernel (1992 tokens, `scratch/gdnncu.py`): 165 KB smem at num_stages 3 → 1 CTA per SM, 96
+  CTAs; issue/latency-bound (3.55 cycles per issued instruction, ~1620 instructions per warp per chunk), wgmma
+  waits 27% of stall samples. The same 64×64 dots by mma.sync (1/2/8 warps) or wgmma give identical bits.
+- The q k^T intra-chunk attention (masked, gated, bf16) does not depend on h, so it can leave the serial chain:
+  Aq [T, HV, 64] computed elsewhere, the chunk kernel only does o = q h + Aq v_new. Bit-exact. kkt + chunk for
+  1992 tokens: 149 us → own kernel 130 us (4f33408) → extra programs [0, H) of the kkt launch with their own gate
+  cumsum, no wait for kkt 119 us (2bda9a1; GATES mode 153 → 121). Computing Aq inside the 1-warp kkt programs:
+  170 us (rejected). `AGENTOPT_GDN_AQ=0` restores the old path.
+- In the model the gain mostly disappears: in the mixed step chunk (~107 us raw) runs concurrently with
+  gdn_decode (~103 us raw) on the other stream; alone they are ~73 and ~60 us (decode's 176 MB read floor ~59).
+  Replay A/B c357466 → c6ee482 (3 rounds): longctx 38.80 / 38.81 / 38.78 → 38.71 / 38.71 / 38.68 s (−0.26%);
+  127-task (2 rounds) 8.425 / 8.425 → 8.416 / 8.413 s (−0.13%). Accuracy unchanged (bit-exact).
+- Power is a wall: in the longctx run the busy GPU averages ~631 W (limit 700), SM clock mean ~1620 MHz, min
+  1350 (max 1980). Shortening a low-power latency-bound phase speeds it up but leaves less of the energy budget
+  for the GEMMs; the floor is energy per step, not only time per kernel.
