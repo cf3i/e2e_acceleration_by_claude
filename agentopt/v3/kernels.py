@@ -540,6 +540,41 @@ def _fs_row(x, ai, i, o_c):
 
 
 @triton.jit
+def _gdn_aq_kernel(q, k, g, Aq, cu_seqlens, chunk_indices, H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr,
+                   BT: tl.constexpr):
+    """Intra-chunk attention of the chunk kernel, tril(q k^T exp2(g_i - g_j)) (bf16), per (chunk, K head) for the
+    HV / H value heads sharing it: no h dependence, so off the chunk kernel's serial chain. Same dots as computed
+    there (bit-exact)."""
+    gdc_wait()
+    i_t, i_h = tl.program_id(0), tl.program_id(1)
+    i_n = tl.load(chunk_indices + i_t * 2).to(tl.int32)
+    i_t = tl.load(chunk_indices + i_t * 2 + 1).to(tl.int32)
+    bos = tl.load(cu_seqlens + i_n).to(tl.int32)
+    T = tl.load(cu_seqlens + i_n + 1).to(tl.int32) - bos
+    if i_t * BT >= T:
+        return
+    o_t = i_t * BT + tl.arange(0, BT)
+    m_t = o_t < T
+    o_k1 = tl.arange(0, 64)
+    o_k2 = 64 + o_k1
+    o_a = tl.arange(0, BT)
+    q += (bos * H + i_h).to(tl.int64) * K
+    k += (bos * H + i_h).to(tl.int64) * K
+    b_q = tl.load(q + o_t[:, None] * (H * K) + o_k1[None, :], mask=m_t[:, None], other=0.0)
+    b_k = tl.load(k + o_k1[:, None] + o_t[None, :] * (H * K), mask=m_t[None, :], other=0.0)
+    b_A = tl.dot(b_q, b_k)
+    b_q = tl.load(q + o_t[:, None] * (H * K) + o_k2[None, :], mask=m_t[:, None], other=0.0)
+    b_k = tl.load(k + o_k2[:, None] + o_t[None, :] * (H * K), mask=m_t[None, :], other=0.0)
+    b_A += tl.dot(b_q, b_k)
+    m = (o_t[:, None] >= o_t[None, :]) & (m_t[:, None] & m_t)
+    for j in tl.static_range(HV // H):
+        hv = i_h * (HV // H) + j
+        b_g = tl.load(g + (bos + o_t).to(tl.int64) * HV + hv, mask=m_t, other=0.0)
+        a = tl.where(m, b_A * tl.exp2(b_g[:, None] - b_g[None, :]), 0).to(tl.bfloat16)
+        tl.store(Aq + ((bos + o_t) * HV + hv).to(tl.int64)[:, None] * BT + o_a[None, :], a, mask=m_t[:, None])
+
+
+@triton.jit
 def _gx(kk, ga, gb, ba, ma, mb, STRICT: tl.constexpr, o_c):
     m = ma[:, None] & mb[None, :]
     if STRICT:
@@ -672,10 +707,11 @@ def _gdn_kkt_kernel(k, g_raw, g, beta, A, cu_seqlens, chunk_indices, gscale, H: 
 
 
 
+
 @triton.jit
-def _gdn_chunk_kernel(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale,
+def _gdn_chunk_kernel(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale, Aq,
                       H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr, V: tl.constexpr, BT: tl.constexpr,
-                      BV: tl.constexpr):
+                      BV: tl.constexpr, AQ: tl.constexpr):
     """Inter-chunk recurrence fused with the chunk outputs: per chunk, v_new = u - w h with fla's u = A (beta v),
     w = A (beta exp(g) k) computed as v_new = A (beta (v - exp(g) k h)) (one 64 x 64 dot instead of two, no w / u
     in HBM; bf16 MMA inputs as in fla), o = scale (q h exp(g) + tril(q k^T exp(g_i - g_j)) v_new), then
@@ -700,6 +736,7 @@ def _gdn_chunk_kernel(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale
         q += (bos * H + i_h // (HV // H)).to(tl.int64) * K
         k += (bos * H + i_h // (HV // H)).to(tl.int64) * K
         A += (bos * HV + i_h).to(tl.int64) * BT
+        Aq += (bos * HV + i_h).to(tl.int64) * BT
         for i_t in range(NT):
             o_t = i_t * BT + tl.arange(0, BT)
             m_t = o_t < T
@@ -714,16 +751,24 @@ def _gdn_chunk_kernel(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale
             b_v = tl.load(v + o_t[:, None] * (HV * V) + o_v[None, :], mask=m_t[:, None], other=0.0).to(tl.float32) - b_v * tl.exp2(b_g)[:, None]
             b_Aw = tl.load(A + o_t[:, None] * (HV * BT) + o_a[None, :], mask=m_t[:, None], other=0.0)
             b_v = tl.dot(b_Aw, (b_v * b_b[:, None]).to(tl.bfloat16))
-            b_q = tl.load(q + o_t[:, None] * (H * K) + o_k1[None, :], mask=m_t[:, None], other=0.0)
-            b_o = tl.dot(b_q, h1)
-            b_A = tl.dot(b_q, b_k1)
-            b_q = tl.load(q + o_t[:, None] * (H * K) + o_k2[None, :], mask=m_t[:, None], other=0.0)
-            b_o += tl.dot(b_q, h2)
-            b_A += tl.dot(b_q, b_k2)
-            b_o = b_o * tl.exp2(b_g)[:, None]
-            b_A = b_A * tl.exp2(b_g[:, None] - b_g[None, :])
-            b_A = tl.where((o_t[:, None] >= o_t[None, :]) & (m_t[:, None] & m_t), b_A, 0)
-            b_o = b_o * scale + tl.dot(b_A.to(tl.bfloat16), b_v.to(tl.bfloat16)) * scale
+            if AQ:
+                b_q = tl.load(q + o_t[:, None] * (H * K) + o_k1[None, :], mask=m_t[:, None], other=0.0)
+                b_o = tl.dot(b_q, h1)
+                b_q = tl.load(q + o_t[:, None] * (H * K) + o_k2[None, :], mask=m_t[:, None], other=0.0)
+                b_o += tl.dot(b_q, h2)
+                b_o = b_o * tl.exp2(b_g)[:, None]
+                b_A = tl.load(Aq + o_t[:, None] * (HV * BT) + o_a[None, :], mask=m_t[:, None], other=0.0)
+            else:
+                b_q = tl.load(q + o_t[:, None] * (H * K) + o_k1[None, :], mask=m_t[:, None], other=0.0)
+                b_o = tl.dot(b_q, h1)
+                b_A = tl.dot(b_q, b_k1)
+                b_q = tl.load(q + o_t[:, None] * (H * K) + o_k2[None, :], mask=m_t[:, None], other=0.0)
+                b_o += tl.dot(b_q, h2)
+                b_A += tl.dot(b_q, b_k2)
+                b_o = b_o * tl.exp2(b_g)[:, None]
+                b_A = b_A * tl.exp2(b_g[:, None] - b_g[None, :])
+                b_A = tl.where((o_t[:, None] >= o_t[None, :]) & (m_t[:, None] & m_t), b_A, 0).to(tl.bfloat16)
+            b_o = b_o * scale + tl.dot(b_A, b_v.to(tl.bfloat16)) * scale
             tl.store(o + o_t[:, None] * (HV * V) + o_v[None, :], b_o.to(tl.bfloat16), mask=m_t[:, None])
             b_g_last = tl.load(g + (bos + tl.minimum((i_t + 1) * BT, T) - 1).to(tl.int64) * HV + i_h).to(tl.float32)
             b_v = (b_v * tl.where(m_t, tl.exp2(b_g_last - b_g), 0)[:, None]).to(tl.bfloat16)
@@ -739,6 +784,12 @@ def _gdn_chunk_kernel(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale
 # 4-warp dots are much faster per chunk. (BV 16/32 with num_warps >= 4 and num_stages=1 miscompile in Triton 3.6:
 # out-of-bounds shared read.)
 GDN_CHUNK_CFG = {"BV": 64, "num_warps": 4, "num_stages": 3}
+# intra-chunk attention tril(q k^T ...) by its own kernel (_gdn_aq_kernel) instead of on the chunk kernel's warps:
+# 1992 tokens 150 -> 130 us (kkt + chunk), 4000 267 -> 235, 2 chunks 29 us both (scratch/gdnaq.py). Computing it
+# in the 1-warp kkt kernel instead: 170 us. For steps of < GDN_AQ_MIN rows the extra launch costs more (40 tokens:
+# 19.7 -> 22.2 us).
+GDN_AQ = int(os.environ.get("AGENTOPT_GDN_AQ", "1"))
+GDN_AQ_MIN = 128
 # (Re-checked for the fused w / u version, scratch/gdnfuse.py: 1992 tokens 189 -> 160 us, 4000: 350 -> 289 us,
 # 4 x 512: 177 -> 142 us per layer including kkt_solve; num_stages 2 / 4, 8 warps and BV 32 are slower. Masking the
 # upper triangle of A in-kernel instead of zero-filling it is slower: the masked load stalls the serial chain.)
@@ -775,17 +826,22 @@ def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, n_
         assert g.is_contiguous() and beta.is_contiguous()
         gc = torch.empty_like(g)
     A = torch.empty(T, HV, 64, device=k.device, dtype=k.dtype)
+    aq = GDN_AQ and T >= GDN_AQ_MIN
+    Aq = torch.empty(T, HV, 64, device=k.device, dtype=k.dtype) if aq else A
     hpp, nw = GDN_KKT_CFG
     _gdn_kkt_kernel[(chunk_indices.shape[0], HV // hpp)](k, g, gc, beta, A, cu_seqlens, chunk_indices, RCP_LN2, H=HK,
                                                          HV=HV, K=DK, BT=64, HPP=hpp, PREC="tf32", num_warps=nw,
                                                          launch_pdl=PDL, **gx)
+    if aq:
+        _gdn_aq_kernel[(chunk_indices.shape[0], HK)](q, k, gc, Aq, cu_seqlens, chunk_indices, H=HK, HV=HV, K=DK, BT=64,
+                                                     num_warps=4, launch_pdl=PDL)
     if after_kkt is not None:
         after_kkt()
     if o is None:
         o = torch.empty_like(v)
     c = GDN_CHUNK_CFG
-    _gdn_chunk_kernel[(DV // c["BV"], n_seqs * HV)](q, k, v, A, beta, gc, o, state, seq_slot, cu_seqlens, scale,
-                                                   H=HK, HV=HV, K=DK, V=DV, BT=64, BV=c["BV"],
+    _gdn_chunk_kernel[(DV // c["BV"], n_seqs * HV)](q, k, v, A, beta, gc, o, state, seq_slot, cu_seqlens, scale, Aq,
+                                                   H=HK, HV=HV, K=DK, V=DV, BT=64, BV=c["BV"], AQ=aq,
                                                    num_warps=c["num_warps"], num_stages=c["num_stages"],
                                                    launch_pdl=PDL)
     return o

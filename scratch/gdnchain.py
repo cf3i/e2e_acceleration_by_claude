@@ -10,7 +10,7 @@ from fla.ops.utils.constant import RCP_LN2
 
 
 @triton.jit
-def _chunk(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale,
+def _chunk(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale, Aq,
            H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr, V: tl.constexpr, BT: tl.constexpr,
            BV: tl.constexpr, OUT: tl.constexpr):
     gdc_wait()
@@ -47,7 +47,16 @@ def _chunk(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale,
             b_v = tl.load(v + o_t[:, None] * (HV * V) + o_v[None, :], mask=m_t[:, None], other=0.0).to(tl.float32) - b_v * tl.exp2(b_g)[:, None]
             b_Aw = tl.load(A + o_t[:, None] * (HV * BT) + o_a[None, :], mask=m_t[:, None], other=0.0)
             b_v = tl.dot(b_Aw, (b_v * b_b[:, None]).to(tl.bfloat16))
-            if OUT:
+            if OUT == 2:
+                b_q = tl.load(q + o_t[:, None] * (H * K) + o_k1[None, :], mask=m_t[:, None], other=0.0)
+                b_o = tl.dot(b_q, h1)
+                b_q = tl.load(q + o_t[:, None] * (H * K) + o_k2[None, :], mask=m_t[:, None], other=0.0)
+                b_o += tl.dot(b_q, h2)
+                b_o = b_o * tl.exp2(b_g)[:, None]
+                b_A = tl.load(Aq + ((bos + o_t) * HV + i_h).to(tl.int64)[:, None] * BT + o_a[None, :], mask=m_t[:, None], other=0.0)
+                b_o = b_o * scale + tl.dot(b_A, b_v.to(tl.bfloat16)) * scale
+                tl.store(o + o_t[:, None] * (HV * V) + o_v[None, :], b_o.to(tl.bfloat16), mask=m_t[:, None])
+            elif OUT:
                 b_q = tl.load(q + o_t[:, None] * (H * K) + o_k1[None, :], mask=m_t[:, None], other=0.0)
                 b_o = tl.dot(b_q, h1)
                 b_A = tl.dot(b_q, b_k1)
@@ -77,10 +86,11 @@ for lens in [(1992,), (512, 512, 512, 512)]:
     gc = torch.empty_like(g); A = torch.empty(T + 0, 48, 64, device='cuda', dtype=torch.bfloat16)
     K._gdn_kkt_kernel[(ci.shape[0], 48)](k, g, gc, b, A, cu, ci, RCP_LN2, H=16, HV=48, K=128, BT=64, HPP=1, PREC="tf32", num_warps=1)
     o = torch.empty_like(v)
-    for OUT in (1, 0):
-        for BV, nw, ns_ in [(64, 4, 3), (32, 4, 3), (32, 4, 2), (64, 8, 3)]:
+    Aq = torch.randn(T, 48, 64, device='cuda').to(torch.bfloat16)
+    for OUT in (1, 2, 0):
+        for BV, nw, ns_ in [(64, 4, 3), (64, 4, 2), (32, 4, 3)]:
             try:
-                f = lambda: _chunk[(128 // BV, ns * 48)](q, k, v, A, b, gc, o, st, slots, cu, 0.088, H=16, HV=48, K=128, V=128, BT=64,
+                f = lambda: _chunk[(128 // BV, ns * 48)](q, k, v, A, b, gc, o, st, slots, cu, 0.088, Aq, H=16, HV=48, K=128, V=128, BT=64,
                                                          BV=BV, OUT=OUT, num_warps=nw, num_stages=ns_, launch_pdl=True)
                 t = bench_loop([f], iters=10)
                 print(f"lens {lens} OUT {OUT} BV {BV} nw {nw} ns {ns_}: {t * 1e6:.1f} us", flush=True)
