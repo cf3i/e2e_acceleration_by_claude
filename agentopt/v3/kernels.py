@@ -442,7 +442,7 @@ def gdn_gates(a, b, xs, A_log, dt_bias, HV=48):
 @triton.jit
 def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_ptr, state_ptr, o_ptr, row_slot,
                        row0_ptr, AS, QS, VS, HV: tl.constexpr, HK: tl.constexpr, DK: tl.constexpr, DV: tl.constexpr,
-                       BV: tl.constexpr, HPP: tl.constexpr, STAGES: tl.constexpr, NORM: tl.constexpr):
+                       BV: tl.constexpr, HPP: tl.constexpr, STAGES: tl.constexpr, NORM: tl.constexpr, PF: tl.constexpr):
     """One program per (V block, group of HPP value heads, decode row): gates + one gated delta-rule step on the
     slot's [DK, DV] states (bf16 storage, fp32 math), written back in place; the head loop is software-pipelined
     (the next head's state load overlaps this head's math). q, k are l2-normalized already, or NORM: here (as
@@ -457,8 +457,13 @@ def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_
         dk = tl.arange(0, DK)
         dv = vb * BV + tl.arange(0, BV)
         xs = tl.load(xs_ptr + r)
+        hv0 = tl.program_id(1) * HPP
+        if PF:
+            vn = tl.load(v_ptr + r * VS + hv0 * DV + dv)
+            an = tl.load(a_ptr + r * AS + hv0)
+            bn = tl.load(b_ptr + r * AS + hv0)
         for i in tl.range(0, HPP, num_stages=STAGES):
-            hv = tl.program_id(1) * HPP + i
+            hv = hv0 + i
             kh = hv // (HV // HK)
             sp_ = state_ptr + ((slot * HV + hv) * DK + dk[:, None]) * DV + dv[None, :]
             S = tl.load(sp_, eviction_policy="evict_first").to(tl.float32)
@@ -468,9 +473,20 @@ def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_
                 q = _rbf16(q * tl.rsqrt(tl.sum(q * q, 0) + 1e-6))
                 k = _rbf16(k * tl.rsqrt(tl.sum(k * k, 0) + 1e-6))
             q = q * (1.0 / tl.sqrt(DK * 1.0))
-            v = tl.load(v_ptr + r * VS + hv * DV + dv).to(tl.float32)
-            a = _rbf16(tl.load(a_ptr + r * AS + hv).to(tl.float32) * xs)
-            b = _rbf16(tl.load(b_ptr + r * AS + hv).to(tl.float32) * xs)
+            if PF:
+                # v, a, b are < 4 bytes per thread, too small for the cp.async pipeline: a plain load would stall
+                # every head on its latency, so the next head's are loaded into registers one head early
+                v, a, b = vn.to(tl.float32), an.to(tl.float32), bn.to(tl.float32)
+                hn = hv0 + tl.minimum(i + 1, HPP - 1)
+                vn = tl.load(v_ptr + r * VS + hn * DV + dv)
+                an = tl.load(a_ptr + r * AS + hn)
+                bn = tl.load(b_ptr + r * AS + hn)
+            else:
+                v = tl.load(v_ptr + r * VS + hv * DV + dv).to(tl.float32)
+                a = tl.load(a_ptr + r * AS + hv).to(tl.float32)
+                b = tl.load(b_ptr + r * AS + hv).to(tl.float32)
+            a = _rbf16(a * xs)
+            b = _rbf16(b * xs)
             x = a + tl.load(dtb_ptr + hv)
             sp = tl.where(x > 20.0, x, tl.log(1.0 + tl.exp(x)))
             g = -tl.exp(tl.load(alog_ptr + hv)) * sp
@@ -484,6 +500,10 @@ def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_
             tl.store(o_ptr + (r * HV + hv) * DV + dv, o.to(tl.bfloat16))
 
 
+# v, a, b of the next head loaded one head early (PF, bit-exact): 56 rows 69.6 -> 66.9 us, 96 rows 114 -> 110,
+# GDN branch of a mixed step (prefill || decode, scratch/ovl.py) 167 -> 161 us (scratch/decpf.py, ncu: 27% of the stall
+# samples were the store waiting on the plain v load)
+GDN_DECODE_PF = int(os.environ.get("AGENTOPT_GDN_DECODE_PF", "1"))
 GDN_DECODE_CFG = None  # override for benchmarks; default: by row count (bench/micro_gdn.py)
 
 
@@ -513,7 +533,8 @@ def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows,
     assert q.stride(0) == k.stride(0) and q.stride(1) == k.stride(1) == v.stride(1) == 1
     _gdn_decode_kernel[(DV // c["BV"], HV // c["HPP"], n_rows)](
         q, k, v, a, b, xs, A_log, dt_bias, state, o, row_slot, row0, a.stride(0), q.stride(0), v.stride(0), HV=HV,
-        HK=HK, DK=DK, DV=DV, BV=c["BV"], HPP=c["HPP"], STAGES=c["STAGES"], NORM=norm, num_warps=c["num_warps"],
+        HK=HK, DK=DK, DV=DV, BV=c["BV"], HPP=c["HPP"], STAGES=c["STAGES"], NORM=norm, PF=GDN_DECODE_PF and c["HPP"] > 1,
+        num_warps=c["num_warps"],
         launch_pdl=PDL)
     return o
 

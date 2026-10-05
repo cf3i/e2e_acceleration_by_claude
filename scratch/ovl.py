@@ -40,7 +40,9 @@ def both(wait_kkt=True):
         pre((lambda: main.wait_stream(side)) if wait_kkt else None)
     dec()
     main.wait_stream(side)
-tp = bench_loop([pre], iters=10); td = bench_loop([dec], iters=10)
-tb = bench_loop([both], iters=10); tb0 = bench_loop([lambda: both(False)], iters=10)
-print(f"P {P} ND {ND} chunk {K.GDN_CHUNK_CFG} dec {K._gdn_decode_cfg(ND)}: prefill {tp * 1e6:.1f} us, decode {td * 1e6:.1f}, "
-      f"both (dec after kkt) {tb * 1e6:.1f}, both (dec at once) {tb0 * 1e6:.1f}", flush=True)
+NOBENCH = os.environ.get("NOBENCH")
+if not NOBENCH:
+  tp = bench_loop([pre], iters=10); td = bench_loop([dec], iters=10)
+  tb = bench_loop([both], iters=10); tb0 = bench_loop([lambda: both(False)], iters=10)
+  print(f"P {P} ND {ND} chunk {K.GDN_CHUNK_CFG} dec {K._gdn_decode_cfg(ND)}: prefill {tp * 1e6:.1f} us, decode {td * 1e6:.1f}, "
+        f"both (dec after kkt) {tb * 1e6:.1f}, both (dec at once) {tb0 * 1e6:.1f}", flush=True)
