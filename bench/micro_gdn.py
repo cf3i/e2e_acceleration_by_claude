@@ -16,7 +16,7 @@ HV, HK, DK, DV, S = 48, 16, 128, 128, 128
 rec = (torch.randn(S + 1, HV, DK, DV, device=dev) * 0.1).to(bf)
 A_log = torch.rand(HV, device=dev)
 dtb = torch.randn(HV, device=dev)
-for B in (1, 8, 32, 128):
+for B in [int(x) for x in sys.argv[1:]] or (1, 8, 32, 128):
     q = torch.randn(B, HK, DK, device=dev, dtype=bf)
     k = torch.randn(B, HK, DK, device=dev, dtype=bf)
     v = torch.randn(B, HV, DV, device=dev, dtype=bf)

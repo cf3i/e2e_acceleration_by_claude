@@ -385,12 +385,14 @@ def gdn_gates(a, b, xs, A_log, dt_bias, HV=48):
 def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_ptr, state_ptr, o_ptr, row_slot,
                        row0_ptr, AS, HV: tl.constexpr, HK: tl.constexpr, DK: tl.constexpr, DV: tl.constexpr,
                        BV: tl.constexpr, HPP: tl.constexpr, STAGES: tl.constexpr):
-    """One program per (decode row, group of HPP value heads, V block): gates + one gated delta-rule step on the
+    """One program per (V block, group of HPP value heads, decode row): gates + one gated delta-rule step on the
     slot's [DK, DV] states (bf16 storage, fp32 math), written back in place; the head loop is software-pipelined
-    (the next head's state load overlaps this head's math). q, k are l2-normalized already."""
+    (the next head's state load overlaps this head's math). q, k are l2-normalized already. The V block is the
+    fastest grid axis, so the programs sharing a state's rows run together (DRAM locality: +3-5% bandwidth at
+    BV 64, +50% at BV 32 vs row-fastest)."""
     gdc_wait()
-    r = tl.load(row0_ptr).to(tl.int64) + tl.program_id(0)
-    vb = tl.program_id(2)
+    r = tl.load(row0_ptr).to(tl.int64) + tl.program_id(2)
+    vb = tl.program_id(0)
     slot = tl.load(row_slot + r).to(tl.int64)
     if slot >= 0:
         dk = tl.arange(0, DK)
@@ -435,7 +437,7 @@ def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows,
     o [T, HV, DV] is written for those rows."""
     c = _gdn_decode_cfg(n_rows)
     assert a.stride(0) == b.stride(0) and a.stride(1) == b.stride(1) == 1
-    _gdn_decode_kernel[(n_rows, HV // c["HPP"], DV // c["BV"])](
+    _gdn_decode_kernel[(DV // c["BV"], HV // c["HPP"], n_rows)](
         q, k, v, a, b, xs, A_log, dt_bias, state, o, row_slot, row0, a.stride(0), HV=HV, HK=HK, DK=DK, DV=DV, BV=c["BV"],
         HPP=c["HPP"], STAGES=c["STAGES"], num_warps=c["num_warps"], launch_pdl=PDL)
     return o
