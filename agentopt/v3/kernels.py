@@ -507,8 +507,11 @@ def _gdn_chunk_kernel(q, k, v, w, g, o, state, seq_slot, cu_seqlens, scale,
         tl.store(st + o_k2[:, None] * V + o_v[None, :], b_h2.to(tl.bfloat16))
 
 
-# (BV 16/32 with num_warps >= 4 and num_stages=1 miscompile in Triton 3.6: out-of-bounds shared read)
-GDN_CHUNK_CFG = {"BV": 32, "num_warps": 2, "num_stages": 2}
+# Sweep (scratch/gdnb2.py): BV 64 / 4 warps / 3 stages is best or tied for 1 x 1992, 2 x 1024, 4 x 512 and
+# 300 + 1700 tokens (one long sequence: 188 vs 261 us for BV 32 / 2 warps). Only 96 programs for one sequence, but
+# 4-warp dots are much faster per chunk. (BV 16/32 with num_warps >= 4 and num_stages=1 miscompile in Triton 3.6:
+# out-of-bounds shared read.)
+GDN_CHUNK_CFG = {"BV": 64, "num_warps": 4, "num_stages": 3}
 
 
 
