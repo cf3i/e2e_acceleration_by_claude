@@ -427,9 +427,16 @@ GDN_DECODE_CFG = None  # override for benchmarks; default: by row count (bench/m
 def _gdn_decode_cfg(n_rows):
     if GDN_DECODE_CFG:
         return GDN_DECODE_CFG
+    # Tuned inside the model (scratch/gdn_dec_inmodel.sh, prof_mixed.py), not in isolation: under the power cap
+    # (lower SM clocks) the software-pipelined head loop wins (128 rows 7.31 -> 6.87 ms, 56 decode rows of a mixed
+    # step 4.05 -> 3.41 ms per step), while isolated microbenchmarks show a tie.
     if n_rows <= 8:
         return {"BV": 32, "num_warps": 1, "HPP": 1, "STAGES": 1}
-    return {"BV": 64, "num_warps": 2, "HPP": 1, "STAGES": 1}
+    if n_rows < 24:
+        return {"BV": 64, "num_warps": 2, "HPP": 1, "STAGES": 1}
+    if n_rows < 48:
+        return {"BV": 64, "num_warps": 2, "HPP": 2, "STAGES": 2}
+    return {"BV": 64, "num_warps": 2, "HPP": 4, "STAGES": 3}
 
 
 def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows, o, HV=48, HK=16, DK=128, DV=128):
@@ -770,6 +777,7 @@ def _attn_prefill_kernel(q_ptr, k_cache, v_cache, block_table, tile_tok0, tile_n
 
 
 ATTN_DECODE_NSPLIT = None  # override for benchmarks; default: enough programs to fill the GPU
+ATTN_DECODE_CFG = {"num_warps": 4, "num_stages": 2}
 
 
 def attn_decode(q, k_cache, v_cache, block_table, row_slot, pos, row0, n_rows, o, BS, HQ=24, HKV=4, D=256):
@@ -781,7 +789,7 @@ def attn_decode(q, k_cache, v_cache, block_table, row_slot, pos, row0, n_rows, o
         po = plse = o
     _attn_decode_kernel[(n_rows, HKV, ns)](q, k_cache, v_cache, block_table, row_slot, pos, row0, o, po, plse,
                                            D ** -0.5, block_table.shape[1], HQ=HQ, HKV=HKV, D=D, BS=BS, BLOCK_M=16,
-                                           NSPLIT=ns, num_warps=4, num_stages=2, launch_pdl=PDL)
+                                           NSPLIT=ns, **ATTN_DECODE_CFG, launch_pdl=PDL)
     if ns > 1:
         _attn_decode_combine_kernel[(n_rows, HQ)](po, plse, row_slot, row0, o, HQ=HQ, D=D, NSPLIT=ns, num_warps=4,
                                                   launch_pdl=PDL)
