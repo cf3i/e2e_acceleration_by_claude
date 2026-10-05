@@ -540,19 +540,33 @@ def _fs_row(x, ai, i, o_c):
 
 
 @triton.jit
-def _gdn_aq_kernel(q, k, g, Aq, cu_seqlens, chunk_indices, H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr,
-                   BT: tl.constexpr):
-    """Intra-chunk attention of the chunk kernel, tril(q k^T exp2(g_i - g_j)) (bf16), per (chunk, K head) for the
-    HV / H value heads sharing it: no h dependence, so off the chunk kernel's serial chain. Same dots as computed
-    there (bit-exact)."""
-    gdc_wait()
-    i_t, i_h = tl.program_id(0), tl.program_id(1)
-    i_n = tl.load(chunk_indices + i_t * 2).to(tl.int32)
-    i_t = tl.load(chunk_indices + i_t * 2 + 1).to(tl.int32)
-    bos = tl.load(cu_seqlens + i_n).to(tl.int32)
-    T = tl.load(cu_seqlens + i_n + 1).to(tl.int32) - bos
-    if i_t * BT >= T:
-        return
+def _gate_cum(g_raw, a_raw, b_raw, xs_ptr, alog_ptr, dtb_ptr, AS, gscale, bos, o_t, m_t, hv, HV: tl.constexpr,
+              GATES: tl.constexpr):
+    """Chunk-local cumsum of the log2 gates of value head hv (as fla's chunk_local_cumsum), and beta (GATES: the gates
+    as _gdn_gates_kernel from the GEMM outputs a, b (/ xs): g = -exp(A_log) softplus(a + dt_bias), beta = sigmoid(b))."""
+    pg = (bos + o_t).to(tl.int64) * HV + hv
+    if GATES:
+        rr = (bos + o_t).to(tl.int64)
+        xsv = tl.load(xs_ptr + rr, mask=m_t, other=0.0)
+        ga = _rbf16(tl.load(a_raw + rr * AS + hv, mask=m_t, other=0.0).to(tl.float32) * xsv)
+        gb = _rbf16(tl.load(b_raw + rr * AS + hv, mask=m_t, other=0.0).to(tl.float32) * xsv)
+        gx = ga + tl.load(dtb_ptr + hv)
+        gr = -tl.exp(tl.load(alog_ptr + hv)) * tl.where(gx > 20.0, gx, tl.log(1.0 + tl.exp(gx)))
+        bt = tl.sigmoid(gb)
+        gr = tl.where(m_t, gr, 0.0)
+    else:
+        gr = tl.load(g_raw + pg, mask=m_t, other=0.0)
+        bt = gr
+    return tl.cumsum(gr, axis=0) * gscale, bt
+
+
+@triton.jit
+def _gdn_aq(q, k, Aq, g_raw, a_raw, b_raw, xs_ptr, alog_ptr, dtb_ptr, AS, gscale, bos, T, i_t, i_h,
+            H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr, BT: tl.constexpr, GATES: tl.constexpr):
+    """Intra-chunk attention of the chunk kernel, tril(q k^T exp2(g_i - g_j)) (bf16), for the HV / H value heads
+    sharing K head i_h: no h dependence, so off the chunk kernel's serial chain. Run by extra programs of the kkt
+    launch (own gate cumsum, same code: no wait for the kkt programs). Same dots as the chunk kernel computed it
+    (mma.sync / wgmma, any warp count: bit-identical)."""
     o_t = i_t * BT + tl.arange(0, BT)
     m_t = o_t < T
     o_k1 = tl.arange(0, 64)
@@ -569,7 +583,7 @@ def _gdn_aq_kernel(q, k, g, Aq, cu_seqlens, chunk_indices, H: tl.constexpr, HV: 
     m = (o_t[:, None] >= o_t[None, :]) & (m_t[:, None] & m_t)
     for j in tl.static_range(HV // H):
         hv = i_h * (HV // H) + j
-        b_g = tl.load(g + (bos + o_t).to(tl.int64) * HV + hv, mask=m_t, other=0.0)
+        b_g, _ = _gate_cum(g_raw, a_raw, b_raw, xs_ptr, alog_ptr, dtb_ptr, AS, gscale, bos, o_t, m_t, hv, HV, GATES)
         a = tl.where(m, b_A * tl.exp2(b_g[:, None] - b_g[None, :]), 0).to(tl.bfloat16)
         tl.store(Aq + ((bos + o_t) * HV + hv).to(tl.int64)[:, None] * BT + o_a[None, :], a, mask=m_t[:, None])
 
@@ -585,7 +599,7 @@ def _gx(kk, ga, gb, ba, ma, mb, STRICT: tl.constexpr, o_c):
 @triton.jit
 def _gdn_kkt_kernel(k, g_raw, g, beta, A, cu_seqlens, chunk_indices, gscale, H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr,
                BT: tl.constexpr, HPP: tl.constexpr, PREC: tl.constexpr, a_raw=None, b_raw=None, xs_ptr=None,
-               alog_ptr=None, dtb_ptr=None, AS=0, GATES: tl.constexpr = 0):
+               alog_ptr=None, dtb_ptr=None, AS=0, GATES: tl.constexpr = 0, q=None, Aq=None, AQ: tl.constexpr = 0):
     gdc_wait()
     i_t, i_hg = tl.program_id(0), tl.program_id(1)
     i_n = tl.load(chunk_indices + i_t * 2).to(tl.int32)
@@ -594,6 +608,12 @@ def _gdn_kkt_kernel(k, g_raw, g, beta, A, cu_seqlens, chunk_indices, gscale, H: 
     T = tl.load(cu_seqlens + i_n + 1).to(tl.int32) - bos
     if i_t * BT >= T:
         return
+    if AQ:
+        # programs HV / HPP + [0, H): the chunk kernel's intra-chunk attention
+        if i_hg >= HV // HPP:
+            _gdn_aq(q, k, Aq, g_raw, a_raw, b_raw, xs_ptr, alog_ptr, dtb_ptr, AS, gscale, bos, T, i_t, i_hg - HV // HPP,
+                    H, HV, K, BT, GATES)
+            return
     BC: tl.constexpr = 16
     o_c = tl.arange(0, BC)
     t0 = i_t * BT + o_c
@@ -628,23 +648,12 @@ def _gdn_kkt_kernel(k, g_raw, g, beta, A, cu_seqlens, chunk_indices, gscale, H: 
     o_t = i_t * BT + tl.arange(0, BT)
     m_t = o_t < T
     for j in tl.static_range(HPP):
-        # chunk-local cumsum of the log2 gates (as fla's chunk_local_cumsum), stored for the chunk kernel and
-        # re-read in 16-row pieces
+        # gate cumsum stored for the chunk kernel and re-read in 16-row pieces
+        gcum, bt = _gate_cum(g_raw, a_raw, b_raw, xs_ptr, alog_ptr, dtb_ptr, AS, gscale, bos, o_t, m_t, hv0 + j, HV, GATES)
         pg = (bos + o_t).to(tl.int64) * HV + hv0 + j
         if GATES:
-            # the gates (as _gdn_gates_kernel) from the GEMM outputs a, b (/ xs): g = -exp(A_log) softplus(a + dt_bias),
-            # beta = sigmoid(b)
-            rr = (bos + o_t).to(tl.int64)
-            xsv = tl.load(xs_ptr + rr, mask=m_t, other=0.0)
-            ga = _rbf16(tl.load(a_raw + rr * AS + hv0 + j, mask=m_t, other=0.0).to(tl.float32) * xsv)
-            gb = _rbf16(tl.load(b_raw + rr * AS + hv0 + j, mask=m_t, other=0.0).to(tl.float32) * xsv)
-            gx = ga + tl.load(dtb_ptr + hv0 + j)
-            gr = -tl.exp(tl.load(alog_ptr + hv0 + j)) * tl.where(gx > 20.0, gx, tl.log(1.0 + tl.exp(gx)))
-            tl.store(beta + pg, tl.sigmoid(gb), mask=m_t)
-            gr = tl.where(m_t, gr, 0.0)
-        else:
-            gr = tl.load(g_raw + pg, mask=m_t, other=0.0)
-        tl.store(g + pg, tl.cumsum(gr, axis=0) * gscale, mask=m_t)
+            tl.store(beta + pg, bt, mask=m_t)
+        tl.store(g + pg, gcum, mask=m_t)
     tl.debug_barrier()
     for j in tl.static_range(HPP):
         hv = hv0 + j
@@ -784,12 +793,10 @@ def _gdn_chunk_kernel(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale
 # 4-warp dots are much faster per chunk. (BV 16/32 with num_warps >= 4 and num_stages=1 miscompile in Triton 3.6:
 # out-of-bounds shared read.)
 GDN_CHUNK_CFG = {"BV": 64, "num_warps": 4, "num_stages": 3}
-# intra-chunk attention tril(q k^T ...) by its own kernel (_gdn_aq_kernel) instead of on the chunk kernel's warps:
-# 1992 tokens 150 -> 130 us (kkt + chunk), 4000 267 -> 235, 2 chunks 29 us both (scratch/gdnaq.py). Computing it
-# in the 1-warp kkt kernel instead: 170 us. For steps of < GDN_AQ_MIN rows the extra launch costs more (40 tokens:
-# 19.7 -> 22.2 us).
+# intra-chunk attention tril(q k^T ...) by extra programs of the kkt launch (_gdn_aq) instead of on the chunk kernel's
+# warps (bit-exact): kkt + chunk 1992 tokens 149 -> 119 us, 4000 268 -> 231, 4 x 512 132 -> 115, 40 tokens 20.0 ->
+# 18.5 (scratch/gdnaq.py). As its own kernel after kkt: 130 us; computed by the kkt programs themselves: 170 us.
 GDN_AQ = int(os.environ.get("AGENTOPT_GDN_AQ", "1"))
-GDN_AQ_MIN = 128
 # (Re-checked for the fused w / u version, scratch/gdnfuse.py: 1992 tokens 189 -> 160 us, 4000: 350 -> 289 us,
 # 4 x 512: 177 -> 142 us per layer including kkt_solve; num_stages 2 / 4, 8 warps and BV 32 are slower. Masking the
 # upper triangle of A in-kernel instead of zero-filling it is slower: the masked load stalls the serial chain.)
@@ -826,15 +833,12 @@ def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, n_
         assert g.is_contiguous() and beta.is_contiguous()
         gc = torch.empty_like(g)
     A = torch.empty(T, HV, 64, device=k.device, dtype=k.dtype)
-    aq = GDN_AQ and T >= GDN_AQ_MIN
+    aq = GDN_AQ
     Aq = torch.empty(T, HV, 64, device=k.device, dtype=k.dtype) if aq else A
     hpp, nw = GDN_KKT_CFG
-    _gdn_kkt_kernel[(chunk_indices.shape[0], HV // hpp)](k, g, gc, beta, A, cu_seqlens, chunk_indices, RCP_LN2, H=HK,
-                                                         HV=HV, K=DK, BT=64, HPP=hpp, PREC="tf32", num_warps=nw,
-                                                         launch_pdl=PDL, **gx)
-    if aq:
-        _gdn_aq_kernel[(chunk_indices.shape[0], HK)](q, k, gc, Aq, cu_seqlens, chunk_indices, H=HK, HV=HV, K=DK, BT=64,
-                                                     num_warps=4, launch_pdl=PDL)
+    _gdn_kkt_kernel[(chunk_indices.shape[0], HV // hpp + (HK if aq else 0))](
+        k, g, gc, beta, A, cu_seqlens, chunk_indices, RCP_LN2, H=HK, HV=HV, K=DK, BT=64, HPP=hpp, PREC="tf32",
+        num_warps=nw, launch_pdl=PDL, q=q, Aq=Aq, AQ=aq, **gx)
     if after_kkt is not None:
         after_kkt()
     if o is None:
