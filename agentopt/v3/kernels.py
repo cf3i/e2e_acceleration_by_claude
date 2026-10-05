@@ -41,13 +41,22 @@ def _rbf16(x):
 # give enough programs to fill the GPU, full-K loop, no split. For large M the per-linear cuBLAS calls are faster.
 @triton.jit
 def _mm_fp8_kernel(x_ptr, w_ptr, s_ptr, y_ptr, M, N, K: tl.constexpr, BM: tl.constexpr, BN: tl.constexpr,
-                   BK: tl.constexpr, STAGES: tl.constexpr):
+                   BK: tl.constexpr, STAGES: tl.constexpr, xs_ptr=None, cw_ptr=None, cst_ptr=None, row_slot=None,
+                   CONV: tl.constexpr = 0):
     gdc_wait()
     m = tl.program_id(1) * BM + tl.arange(0, BM)
     n = tl.program_id(0) * BN + tl.arange(0, BN)
     mm = m < M
     nm = n < N
     acc = tl.zeros((BM, BN), tl.float32)
+    if CONV > 0:  # the conv window loads are issued before the K loop (latency hidden behind it)
+        isconv = tl.program_id(0) * BN < CONV
+        slot = tl.load(row_slot + m, mask=mm, other=0).to(tl.int64)
+        st = cst_ptr + slot[:, None] * 3 * CONV + n[None, :]
+        cm = mm[:, None] & isconv
+        x0 = tl.load(st, mask=cm)
+        x1 = tl.load(st + CONV, mask=cm)
+        x2 = tl.load(st + 2 * CONV, mask=cm)
     for k0 in tl.range(0, K, BK, num_stages=STAGES):
         k = k0 + tl.arange(0, BK)
         x = tl.load(x_ptr + m.to(tl.int64)[:, None] * K + k[None, :], mask=mm[:, None], other=0.0)
@@ -55,8 +64,31 @@ def _mm_fp8_kernel(x_ptr, w_ptr, s_ptr, y_ptr, M, N, K: tl.constexpr, BM: tl.con
         # fp8 wgmma accumulates with reduced precision: promote to fp32 every 128 products (as cuBLAS does)
         acc = tl.dot(x, tl.trans(w), acc, max_num_imprecise_acc=128)
     s = tl.load(s_ptr + n, mask=nm, other=0.0)
-    tl.store(y_ptr + m.to(tl.int64)[:, None] * N + n[None, :], (acc * s[None, :]).to(tl.bfloat16),
-             mask=mm[:, None] & nm[None, :])
+    y = (acc * s[None, :]).to(tl.bfloat16)
+    if CONV > 0:
+        if isconv:
+            y = _conv_step(y, m, mm, n, xs_ptr, cw_ptr, st, x0, x1, x2, CONV)
+    tl.store(y_ptr + m.to(tl.int64)[:, None] * N + n[None, :], y, mask=mm[:, None] & nm[None, :])
+
+
+@triton.jit
+def _conv_step(x, m, mm, n, xs_ptr, cw_ptr, st, x0, x1, x2, C: tl.constexpr):
+    """Decode-step causal conv1d of GEMM output columns n < C (one token per row = per sequence; the channels of a
+    sequence's conv window st (x0..x2 = its values) belong to this program alone, so it updates the window in place):
+    SiLU(conv) without the q / k l2 norm (gdn_decode applies it). Same math as _conv1d_seq_kernel."""
+    xt = _rbf16(x.to(tl.float32) * tl.load(xs_ptr + m, mask=mm, other=0.0)[:, None])
+    x0 = x0.to(tl.float32)
+    x1 = x1.to(tl.float32)
+    x2 = x2.to(tl.float32)
+    w0 = tl.load(cw_ptr + n * 4 + 0)[None, :]
+    w1 = tl.load(cw_ptr + n * 4 + 1)[None, :]
+    w2 = tl.load(cw_ptr + n * 4 + 2)[None, :]
+    w3 = tl.load(cw_ptr + n * 4 + 3)[None, :]
+    acc = x0 * w0 + x1 * w1 + x2 * w2 + xt * w3
+    tl.store(st, x1.to(tl.bfloat16), mask=mm[:, None])
+    tl.store(st + C, x2.to(tl.bfloat16), mask=mm[:, None])
+    tl.store(st + 2 * C, xt.to(tl.bfloat16), mask=mm[:, None])
+    return _rbf16(acc * tl.sigmoid(acc)).to(tl.bfloat16)
 
 
 def mm_fp8_cfg(M, N):
@@ -76,13 +108,18 @@ def mm_fp8_cfg(M, N):
     return None
 
 
-def mm_fp8(x, w, s, cfg):
-    """x [M, K] fp8, w [N, K] fp8, s [N] fp32 -> [M, N] bf16."""
+def mm_fp8(x, w, s, cfg, conv=None):
+    """x [M, K] fp8, w [N, K] fp8, s [N] fp32 -> [M, N] bf16. conv = (xs, conv_w, conv_state, row_slot): columns
+    [0, C) of a decode step's gdn_in projection are replaced by the conv1d output (see _conv_step)."""
     M, K = x.shape
     N = w.shape[0]
     y = torch.empty((M, N), dtype=torch.bfloat16, device=x.device)
     c = dict(cfg)
     BM, BN = c["BM"], c["BN"]
+    if conv is not None:
+        xs, cw, cst, row_slot = conv
+        assert cst.shape[-1] % BN == 0
+        c.update(xs_ptr=xs, cw_ptr=cw, cst_ptr=cst, row_slot=row_slot, CONV=cst.shape[-1])
     _mm_fp8_kernel[(triton.cdiv(N, BN), triton.cdiv(M, BM))](x, w, s, y, M, N, K=K, **c, launch_pdl=PDL)
     return y
 
@@ -391,11 +428,12 @@ def gdn_gates(a, b, xs, A_log, dt_bias, HV=48):
 # ---------------------------------------------------------------- Gated-DeltaNet: fused decode step
 @triton.jit
 def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_ptr, state_ptr, o_ptr, row_slot,
-                       row0_ptr, AS, HV: tl.constexpr, HK: tl.constexpr, DK: tl.constexpr, DV: tl.constexpr,
-                       BV: tl.constexpr, HPP: tl.constexpr, STAGES: tl.constexpr):
+                       row0_ptr, AS, QS, VS, HV: tl.constexpr, HK: tl.constexpr, DK: tl.constexpr, DV: tl.constexpr,
+                       BV: tl.constexpr, HPP: tl.constexpr, STAGES: tl.constexpr, NORM: tl.constexpr):
     """One program per (V block, group of HPP value heads, decode row): gates + one gated delta-rule step on the
     slot's [DK, DV] states (bf16 storage, fp32 math), written back in place; the head loop is software-pipelined
-    (the next head's state load overlaps this head's math). q, k are l2-normalized already. The V block is the
+    (the next head's state load overlaps this head's math). q, k are l2-normalized already, or NORM: here (as
+    _conv_out does, then rounded to bf16 as if stored). The V block is the
     fastest grid axis, so the programs sharing a state's rows run together (DRAM locality: +3-5% bandwidth at
     BV 64, +50% at BV 32 vs row-fastest)."""
     gdc_wait()
@@ -411,9 +449,13 @@ def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_
             kh = hv // (HV // HK)
             sp_ = state_ptr + ((slot * HV + hv) * DK + dk[:, None]) * DV + dv[None, :]
             S = tl.load(sp_, eviction_policy="evict_first").to(tl.float32)
-            q = tl.load(q_ptr + (r * HK + kh) * DK + dk).to(tl.float32) * (1.0 / tl.sqrt(DK * 1.0))
-            k = tl.load(k_ptr + (r * HK + kh) * DK + dk).to(tl.float32)
-            v = tl.load(v_ptr + (r * HV + hv) * DV + dv).to(tl.float32)
+            q = tl.load(q_ptr + r * QS + kh * DK + dk).to(tl.float32)
+            k = tl.load(k_ptr + r * QS + kh * DK + dk).to(tl.float32)
+            if NORM:
+                q = _rbf16(q * tl.rsqrt(tl.sum(q * q, 0) + 1e-6))
+                k = _rbf16(k * tl.rsqrt(tl.sum(k * k, 0) + 1e-6))
+            q = q * (1.0 / tl.sqrt(DK * 1.0))
+            v = tl.load(v_ptr + r * VS + hv * DV + dv).to(tl.float32)
             a = _rbf16(tl.load(a_ptr + r * AS + hv).to(tl.float32) * xs)
             b = _rbf16(tl.load(b_ptr + r * AS + hv).to(tl.float32) * xs)
             x = a + tl.load(dtb_ptr + hv)
@@ -447,14 +489,19 @@ def _gdn_decode_cfg(n_rows):
     return {"BV": 64, "num_warps": 2, "HPP": 4, "STAGES": 3}
 
 
-def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows, o, HV=48, HK=16, DK=128, DV=128):
+def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows, o, HV=48, HK=16, DK=128, DV=128,
+               norm=False):
     """Rows row0 + [0, n_rows) with row_slot >= 0 are decode rows (row0: device int32 scalar).
-    o [T, HV, DV] is written for those rows."""
+    o [T, HV, DV] is written for those rows. q, k [T, HK * DK] / v [T, HV * DV]: unit column stride (column slices
+    of one buffer ok); norm: q, k not l2-normalized yet."""
     c = _gdn_decode_cfg(n_rows)
     assert a.stride(0) == b.stride(0) and a.stride(1) == b.stride(1) == 1
+    q, k, v = q.reshape(q.shape[0], -1), k.reshape(k.shape[0], -1), v.reshape(v.shape[0], -1)
+    assert q.stride(0) == k.stride(0) and q.stride(1) == k.stride(1) == v.stride(1) == 1
     _gdn_decode_kernel[(DV // c["BV"], HV // c["HPP"], n_rows)](
-        q, k, v, a, b, xs, A_log, dt_bias, state, o, row_slot, row0, a.stride(0), HV=HV, HK=HK, DK=DK, DV=DV, BV=c["BV"],
-        HPP=c["HPP"], STAGES=c["STAGES"], num_warps=c["num_warps"], launch_pdl=PDL)
+        q, k, v, a, b, xs, A_log, dt_bias, state, o, row_slot, row0, a.stride(0), q.stride(0), v.stride(0), HV=HV,
+        HK=HK, DK=DK, DV=DV, BV=c["BV"], HPP=c["HPP"], STAGES=c["STAGES"], NORM=norm, num_warps=c["num_warps"],
+        launch_pdl=PDL)
     return o
 
 
@@ -951,6 +998,22 @@ def attn_decode(q, k_cache, v_cache, block_table, row_slot, pos, row0, n_rows, o
         _attn_decode_combine_kernel[(n_rows, HQ)](po, plse, row_slot, row0, o, HQ=HQ, D=D, NSPLIT=ns, num_warps=4,
                                                   launch_pdl=PDL)
     return o
+
+
+try:  # FA3 (github.com/Dao-AILab/flash-attention hopper/, built with only hdim 256 bf16 forward kernels)
+    import flash_attn_3._C  # noqa: F401
+    FA3 = torch.ops.flash_attn_3
+except ImportError:
+    FA3 = None
+
+
+def attn_prefill_fa3(q, k_cache, v_cache, page_table, seqk, cu, max_q, o, BS, HKV=4, D=256):
+    """Same as attn_prefill with FA3: the sequences of cu (q rows cu[i]:cu[i+1], int32) attend causally to their
+    seqk[i] cached tokens (pages page_table[i]); writes only their rows of o. max_q: bound on a sequence's rows."""
+    NB = k_cache.shape[0] // BS
+    FA3.fwd(q, k_cache.view(NB, BS, HKV, D), v_cache.view(NB, BS, HKV, D), None, None, None, o, cu, None, None, None,
+            seqk, max_q, None, page_table, None, None, None, None, None, None, None, None, D ** -0.5, True, -1, -1, 0,
+            0.0, True, None, 1, None, 0)
 
 
 PREFILL_CFG = {"BLOCK_M": 128, "num_warps": 8, "num_stages": 2}

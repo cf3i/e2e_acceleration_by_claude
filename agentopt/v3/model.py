@@ -36,6 +36,9 @@ CONV_C = 2 * HK * DK + HV * DV  # 10240
 # small mixed steps (B=40, 40 prefill rows) 20.6 -> 20.0 ms; big ones are power-capped, the sections shorten but
 # the step does not (energy per step is the bound).
 OVERLAP = set(filter(None, os.environ.get("AGENTOPT_OVERLAP", "gdn,attn").split(",")))
+CONV_FUSE = os.environ.get("AGENTOPT_CONV_FUSE", "1") != "0"
+# prefill-row attention: FA3 (flash_attn_3 hopper build, hdim 256 paged; 1.35-1.5x our Triton kernel) if installed
+ATTN_FA3 = K.FA3 is not None and os.environ.get("AGENTOPT_ATTN_FA3", "1") != "0"
 HQ, HKV, HD, ROT = 24, 4, 256, 64
 GROUPS = {"gate_up": ("mlp.", ["gate_proj", "up_proj"]),
           "gdn_in": ("linear_attn.", ["in_proj_qkv", "in_proj_z", "in_proj_b", "in_proj_a"]),
@@ -71,6 +74,7 @@ class Step:
     sample_slot: torch.Tensor  # [nl] slot whose last_tok receives the sample (scratch if none)
     # prefill (npre > 0)
     p_slot: torch.Tensor | None = None     # [npre + 1] slots of the prefill sequences (last ones: padding)
+    p_seqk: torch.Tensor | None = None     # [npre + 1] their lengths after this step (0: padding)
     cu: torch.Tensor | None = None         # [npre + 2] row offsets
     chunk_idx: torch.Tensor | None = None  # [nt, 2] (sequence, chunk) of each 64-chunk; padding -> empty seq
     tiles: torch.Tensor | None = None      # [4, n_tiles] attention tiles: tok0, ntok, pos0, slot
@@ -183,15 +187,16 @@ class Model:
         q, s = w
         return torch._scaled_mm(xq, q.t(), self.one, s, out_dtype=torch.bfloat16)
 
-    def mm_group(self, xq, G):
+    def mm_group(self, xq, G, conv=None):
         """G = (stacked fp8 weight, per-column scale vector, per-linear (weight view, scale)): linears sharing an
         input, weights and per-tensor scales unchanged. Outputs: column slices of one small-M GEMM, or per-linear
-        cuBLAS calls."""
+        cuBLAS calls. conv: see K.mm_fp8 (None if the GEMM cannot take it)."""
         w, svec, parts = G
         cfg = K.mm_fp8_cfg(xq.shape[0], w.shape[0])
         if cfg is None:
+            assert conv is None
             return [self.mm(xq, p) for p in parts]
-        y = K.mm_fp8(xq, w, svec, cfg)
+        y = K.mm_fp8(xq, w, svec, cfg, conv)
         out, o = [], 0
         for q, _ in parts:
             out.append(y[:, o:o + q.shape[0]])
@@ -205,8 +210,9 @@ class Model:
         res = self.embed[ids]
         if b.npre:
             pre = (b.cu.long(), b.chunk_idx.long())
+            page_table = self.block_table[b.p_slot.long()] if ATTN_FA3 else None
         else:
-            pre = None
+            pre = page_table = None
         delta = dscale = None
         li = ai = 0
         for L in self.layers:
@@ -215,7 +221,7 @@ class Model:
                 delta, dscale = self._gdn(L, li, xq, xs, b, pre)
                 li += 1
             else:
-                delta, dscale = self._attn(L, ai, xq, xs, b)
+                delta, dscale = self._attn(L, ai, xq, xs, b, page_table)
                 ai += 1
             xq, xs = K.add_rmsnorm_quant(res, L["post_w1"], self.eps, delta, dscale)
             hq, hs = K.silu_mul_quant(*self.mm_group(xq, L["gate_up"]), xs)
@@ -238,9 +244,16 @@ class Model:
             torch.cuda.current_stream().wait_stream(self.side)
 
     def _gdn(self, L, li, xq, xs, b: Step, pre):
-        qkv_raw, z_raw, b_raw, a_raw = self.mm_group(xq, L["gdn_in"])
+        # decode-only steps with the small-M GEMM: conv1d in its epilogue (columns [0, CONV_C) come out as SiLU(conv),
+        # q / k not normalized yet)
+        fuse = CONV_FUSE and not b.npre and K.mm_fp8_cfg(b.T, L["gdn_in"][0].shape[0]) is not None
+        conv = (xs, L["conv_w"], self.conv[li], b.row_seq_slot) if fuse else None
+        qkv_raw, z_raw, b_raw, a_raw = self.mm_group(xq, L["gdn_in"], conv)
         ns = b.seq_slot.shape[0]
-        if b.npre:
+        if fuse:
+            q, k, v = qkv_raw[:, :HK * DK], qkv_raw[:, HK * DK:2 * HK * DK], qkv_raw[:, 2 * HK * DK:]
+            o = torch.empty((b.T, HV, DV), dtype=torch.bfloat16, device=self.dev)
+        elif b.npre:
             q, k, v = K.conv1d_rows(qkv_raw, xs, L["conv_w"], self.conv[li], b.row_start, b.row_seq_slot,
                                     b.seq_slot, b.seq_start, b.seq_len, ns)
             g, beta = K.gdn_gates(a_raw, b_raw, xs, L["A_log"], L["dt_bias"])
@@ -253,12 +266,12 @@ class Model:
                                       ns)
             o = torch.empty((b.T, HV, DV), dtype=torch.bfloat16, device=self.dev)
         K.gdn_decode(q, k, v, a_raw, b_raw, xs, L["A_log"], L["dt_bias"], self.rec[li], b.row_slot, b.row0, b.dmax,
-                     o)
+                     o, norm=fuse)
         self._join("gdn", b)
         oq, os_ = K.gated_norm_quant(o, z_raw, xs, L["gnorm_w"], self.eps)
         return self.mm(oq, L["out_proj"]), os_
 
-    def _attn(self, L, ai, xq, xs, b: Step):
+    def _attn(self, L, ai, xq, xs, b: Step, page_table):
         q_raw, k_raw, v_raw = self.mm_group(xq, L["attn_in"])
         q = K.qkv_prep(q_raw, k_raw, v_raw, xs, b.pos, b.slot_map, L["qn_w1"], L["kn_w1"], self.kc[ai],
                        self.vc[ai], self.eps, self.theta)
@@ -266,8 +279,11 @@ class Model:
         if b.npre:
             t = b.tiles
             with self._branch("attn"):
-                K.attn_prefill(q, self.kc[ai], self.vc[ai], self.block_table, t[0], t[1], t[2], t[3], t.shape[1], o,
-                               self.BS)
+                if ATTN_FA3:
+                    K.attn_prefill_fa3(q, self.kc[ai], self.vc[ai], page_table, b.p_seqk, b.cu, b.T, o, self.BS)
+                else:
+                    K.attn_prefill(q, self.kc[ai], self.vc[ai], self.block_table, t[0], t[1], t[2], t[3], t.shape[1],
+                                   o, self.BS)
         K.attn_decode(q, self.kc[ai], self.vc[ai], self.block_table, b.row_slot, b.pos, b.row0, b.dmax, o, self.BS)
         self._join("attn", b)
         oq, os_ = K.attn_gate_quant(o, q_raw, xs)

@@ -333,6 +333,15 @@ for sl, p0, n in segs:
     for t in [0, 1, n // 2, n - 1]:
         check(f"attn_prefill slot{sl} t{t}", op[r0 + t], ref_attn(qp[r0 + t], sl, p0 + t), 2e-2, 2e-2)
     r0 += n
+if K.FA3 is not None:  # same segments through FA3 (+ a padding sequence: 0 rows, 0 cached tokens)
+    of = torch.zeros_like(qp)
+    K.attn_prefill_fa3(qp, kc, vc, bt[t32([sl for sl, _, _ in segs] + [0]).long()],
+                       t32([p0 + n for _, p0, n in segs] + [0]), t32([0, segs[0][2], Tp, Tp]), Tp, of, BS)
+    r0 = 0
+    for sl, p0, n in segs:
+        for t in [0, 1, n // 2, n - 1]:
+            check(f"attn_prefill_fa3 slot{sl} t{t}", of[r0 + t], ref_attn(qp[r0 + t], sl, p0 + t), 2e-2, 2e-2)
+        r0 += n
 
 # ---- attention output gate + quant
 T = 5

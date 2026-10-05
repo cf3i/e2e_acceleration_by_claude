@@ -45,7 +45,7 @@ class Layout:
              ("row_slot", T + self.dmax), ("row0", 1), ("seq_slot", self.ns), ("seq_start", self.ns),
              ("seq_len", self.ns), ("logit_row", self.nl), ("sample_slot", self.nl)]
         if npre:
-            f += [("p_slot", npre + 1), ("cu", npre + 2), ("chunk_idx", 2 * self.nt),
+            f += [("p_slot", npre + 1), ("p_seqk", npre + 1), ("cu", npre + 2), ("chunk_idx", 2 * self.nt),
                   ("tiles", 4 * self.n_tiles)]
         self.off, o = {}, 0
         for name, n in f:
@@ -301,6 +301,7 @@ class V3Engine:
         nl = 0
         if lay.npre:
             v["p_slot"][:] = sc
+            v["p_seqk"][:] = 0
             v["cu"][:] = P
             ci = v["chunk_idx"]
             ci[:, 0], ci[:, 1] = lay.npre, 0
@@ -319,7 +320,7 @@ class V3Engine:
                 v["row_start"][rows] = r
                 v["row_seq_slot"][rows] = s.slot
                 v["seq_slot"][i], v["seq_start"][i], v["seq_len"][i] = s.slot, r, c
-                v["p_slot"][i], v["cu"][i] = s.slot, r
+                v["p_slot"][i], v["p_seqk"][i], v["cu"][i] = s.slot, p0 + c, r
                 k = -(-c // CHUNK)
                 ci[nc:nc + k, 0], ci[nc:nc + k, 1] = i, np.arange(k)
                 nc += k
