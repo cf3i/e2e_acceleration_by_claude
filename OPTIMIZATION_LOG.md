@@ -172,7 +172,8 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
 | **official p3_s01_kernels / _longctx (2defad5)** | **8.86 s** (acc 0.945) | **40.64 s** (acc 0.945) |
 | GDN chunk kernel BV 64 / 4 warps / 3 stages (e8ea498; official p3_s02_gdnchunk) | 8.77 s | 39.61 s |
 | gdn_decode tiers tuned in-model under the power cap (3eaf6fe; official p3_s03_inmodel) | 8.67 s (A/B) | 39.8 s (A/B, noisy) |
-| GDN prefill: recompute_w_u fused into the chunk recurrence (0abefc7; official p3_s04_gdnfuse) | 8.59 s (A/B) | mixed step −1.8 ms |
+| GDN prefill: recompute_w_u fused into the chunk recurrence (0abefc7; official p3_s04_gdnfuse 8.47 / 40.83 s) | 8.59 s (A/B) | mixed step −1.8 ms |
+| GDN kkt + inverse on tensor cores, cumsum fused, no memsets (0b442cc) | 8.96–9.24 s (A/B, task 428 longer) | mixed step −1.5 ms, small step −0.24 ms |
 | vLLM 0.30 fp8, same workloads | 17.54 s | 91.96 s |
 
 ## Where the time is vs physics (2defad5 + 01fe367)
@@ -233,3 +234,19 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
   4 warps), lazy rescaling, manual QK^T pipelining: no gain. Reference FA3 (vLLM build, hdim 256 GQA 6, page 64):
   653 TFLOPS at 1992@3000, 626 at 2×1024@2000, 520 at 1992@0 — worth ~2 ms per mixed step (~1.4% longctx),
   needs a hand-written warp-specialized kernel.
+
+## GDN kkt + triangular inverse on tensor cores (fe02a92, 0b442cc)
+- fla's fused kkt + solve_tril: forward substitution on 16×16 diagonal blocks (14 serial cross-lane reductions),
+  ~48 us per layer at 2k tokens vs ~10 us for loading k and computing k k^T alone. Ours: 16×16 diagonal inverses
+  by (I+Y)^-1 = (I−Y)(I+Y²)(I+Y⁴)(I+Y⁸) (Y strictly lower ⇒ nilpotent), then block merges, tf32 dots like fla's
+  merges; max error vs an fp64 inverse identical to fla's (bf16 output rounding). The chunk-local gate cumsum is
+  fused in and A needs no zero-fill (zeros stored explicitly). Variants (scratch/kkt.py): whole 64×64 product
+  formula 40 us (tf32 FLOP-bound), 32×32 blocks 24 us, 16×16 blocks 18 us (3 heads per program) / 24 us (1 head).
+- In the model, small steps (2 chunks) are a single wave: per-program latency decides, 3 heads per program were
+  34 us per layer vs fla 28 us and made the 127-task run slower; 1 head / 1 warp is best at all sizes (20.7 us
+  small, 2k tokens 132 vs 146 us full gdn_prefill). Mixed step 116.1 → 114.6 ms, small step 18.30 → 18.06 ms.
+- **Makespan vs numerics**: the 127-task makespan went 8.56 → 8.96–9.24 s, steps 515 → 553–576, although every
+  step is faster (16.5 → 15.9–16.1 ms per step). Task 428 now generates 517–564 instead of 391 tokens (2 turns) and
+  becomes the critical chain; the floor is task 304 (512-token cap, 1 turn, 8.47–8.63 s in every revision).
+  Any rounding change (here: a different, equally accurate inverse) reshuffles which task is longest; accuracy is
+  unchanged (0.945). Judge kernel changes by per-step time; the makespan carries ±0.5 s trajectory noise.
