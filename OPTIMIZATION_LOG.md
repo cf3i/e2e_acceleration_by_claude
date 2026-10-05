@@ -178,6 +178,9 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
 | packed bf16 rounding (_rbf16), bit-exact (1e84d12) | mixed step 114.25 → 113.80 ms | |
 | mixed steps: prefill-row GDN / attention kernels on a side stream, concurrent with decode rows (6b5d5f5) | replay A/B: 8.486 → 8.429 s | replay A/B: 39.87 → 39.32 s |
 | replay A/B, 0abefc7 → 6b5d5f5 (same GPU, same trajectories, 2 rounds each) | 8.515 → 8.429 s (−1.0%) | 40.13 → 39.32 s (−2.0%) |
+| decode-step causal conv1d fused into the gdn_in GEMM epilogue, q/k l2-norm into gdn_decode (321c65f) | replay A/B: 8.414 → 8.380 s | |
+| prefill attention by FA3 (built from source, paged, varlen) on the side stream (321c65f) | | mixed step 116.2 → 114.3 ms; both: replay A/B 39.17 → 38.90 s |
+| official p3_s07_fa3conv / _longctx (321c65f) | 8.458 s (acc 0.945) | 39.00 s (acc 0.937, see below) |
 | vLLM 0.30 fp8, same workloads | 17.54 s | 91.96 s |
 
 ## Where the time is vs physics (2defad5 + 01fe367)
@@ -275,3 +278,30 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
   (fla kkt → ours): 2 chunks 27.2 → 25.5 us, 1992 tokens 163 → 143 us, 4×512 144 → 129 us (0b442cc's broken
   version: 20.7 / 132 / 116).
 
+
+## Ledger and the last GEMM / decode sweeps (before 321c65f)
+- GPU ledger (127-task, replay): 8.36 s busy, 0.07 s idle — the host side is done. longctx: 80% of GPU time is
+  mixed 2048-token steps (~1992 prefill + ~55 decode rows), ~116 ms each, of which cuBLAS FP8 GEMMs ~73 ms at
+  ~1.33 PFLOPS (the power-capped practical peak).
+- Medium-M GEMMs (M 64–512), Triton with TMA / warp specialization / swap-AB vs the current dispatch: ≤ 2% better
+  on a few shapes, worse on most; kept (Triton mm_fp8 for gdn_in at small M, cuBLAS for down / out). Distance to
+  the weight-read floor at M=128: gate_up 68.7 vs 57.5 us, down 33.6–35.3 vs 28.8, out 14.2–14.9 vs 10.1.
+- The two N=48 b / a GEMMs at large M merged into one call: ~3 us per layer. Not done.
+- Decode B=1: 11.07 ms vs 8.41 ms speed-of-light; GEMMs ~93% of their read floor, ~1.5 ms of latency-bound
+  small kernels (add_rmsnorm, gnorm, silu ~2.5–4 us per layer each). Early trigger + L2 prefetch: other −0.32 ms,
+  GEMMs +0.27 ms, net −0.05 ms. Closing the rest needs a persistent megakernel.
+
+## FA3 prefill attention + decode conv fusion (321c65f)
+- FA3 (hopper, built from source with only hdim 256 bf16 forward, paged KV, varlen; `/mnt/data/u/feic/pjs/src/
+  build_fa3.sh`): 1992@3000 301 vs 411 us (ours), 1992@6000 501 vs 738, 4×512@1000 113 vs 171. Called directly
+  on our paged cache (page table rows of the prefill slots, `p_seqk` = lengths after the step, 0 for padding
+  entries so the fixed-size graph batch works). Falls back to the Triton kernel if flash_attn_3 is missing.
+- Conv fusion: in decode steps the causal conv1d (window of 3 + new token, silu) runs in the gdn_in merged GEMM
+  epilogue on the qkv columns; one program owns each (slot, channel) window, so it is race-free in place. The q/k
+  l2-norm moved into gdn_decode (NORM flag) — the only non-bit-exact part (reduction order, rare last-bit).
+- Accuracy: 127-task 0.945 (unchanged); longctx 0.937 vs 0.953 for p3_s06 — tasks 304 (also wrong in p3_s04)
+  and 428 now run out of tokens in a verbose first turn. Historical longctx range 0.9375–0.953.
+- Not caused by either change: real (non-replay) longctx runs of the same tree on the dev GPU
+  (`scratch/accenv.sh`): both on 0.953 (the official run of the same commit: 0.937), FA3 off 0.953, conv fusion
+  off 0.945, both off 0.961. Run-to-run spread of the same code is ±2 tasks (batch composition differs between
+  nodes and runs), so longctx accuracy differences under ~0.02 are noise; only collapses (0b442cc) are signals.
