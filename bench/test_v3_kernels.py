@@ -227,6 +227,16 @@ check("gdn_prefill o", po[:cu[-1]], ro[0], 2e-2, 2e-2)
 ref_recp = rec_p.clone()
 ref_recp[[slots_p[i] for i in real]] = rht.to(bf)
 check("gdn_prefill state", rec_p2, ref_recp, 1e-2, 1e-2)
+# correlated keys + slow decay (real chunks; random keys are nearly orthogonal and hide unstable inverses)
+pk_c = F.normalize(torch.randn(1, HK, DK, device=dev) + 0.3 * torch.randn(Tp, HK, DK, device=dev), dim=-1).to(bf)
+pg_c = -0.005 * torch.rand(Tp, HV, device=dev)
+pb_c = 0.5 + 0.5 * torch.rand(Tp, HV, device=dev)
+rec_c = rec_p.clone()
+po = K.gdn_prefill(pq, pk_c, pv, pg_c, pb_c, rec_c, t32(slots_p), cu_t, ci_t, len(lens_p))
+ro, rht = chunk_gated_delta_rule(pq[None, :cu[-1]], pk_c[None, :cu[-1]], pv[None, :cu[-1]], pg_c[None, :cu[-1]],
+                                 pb_c[None, :cu[-1]], initial_state=rec_p[[slots_p[i] for i in real]].float(),
+                                 output_final_state=True, cu_seqlens=cu_r, scale=DK ** -0.5)
+check("gdn_prefill o corr. keys", po[:cu[-1]], ro[0], 2e-2, 2e-2)
 
 # ---- gated rmsnorm * silu(z) + quant
 T = 7

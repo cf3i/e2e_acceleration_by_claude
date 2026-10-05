@@ -465,18 +465,18 @@ def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows,
 # in place in the slot pool (bf16) and padded sequences (length 0) cost nothing. All sizes are fixed by the caller
 # (padded cu_seqlens / chunk_indices), so the whole step can be captured in a CUDA graph.
 # A = (I + X)^-1, X = strictly-lower(beta_i k_i.k_j exp2(g_i - g_j)) per 64-token chunk and value head (fla's
-# kkt + solve_tril), with all of the inversion on tensor cores: 16 x 16 diagonal blocks by (I + Y)^-1 =
-# (I - Y)(I + Y^2)(I + Y^4)(I + Y^8) (Y nilpotent), then block merges, tf32 like fla's merges. One program per chunk
-# and HPP value heads sharing one K head (k k^T computed once, GDN_KKT_CFG). Same error vs an fp64 inverse as fla (bf16 output
-# rounding), 48 -> 18 us per layer for 2k tokens (scratch/kkt.py; fla: forward substitution, latency-bound).
+# kkt + solve_tril, same math): k k^T in 16-row blocks, gate cumsum fused, 16 x 16 diagonal blocks inverted in fp32
+# by forward substitution, block merges in tf32 like fla. One program per chunk and HPP value heads sharing one K head
+# (GDN_KKT_CFG). Same error vs an fp64 inverse as fla, also on correlated keys (scratch/kkt_adv.py).
 @triton.jit
-def _inv16(x, eye, PREC: tl.constexpr):
-    y = -x
-    p = eye + y
-    for _ in tl.static_range(3):
-        y = tl.dot(y, y, input_precision=PREC)
-        p = p + tl.dot(p, y, input_precision=PREC)
-    return p
+def _fs_row(x, ai, i, o_c):
+    # row i of (I + x)^-1 - I by forward substitution, given rows < i (fp32: the Neumann-product form
+    # (I - x)(I + x^2)(I + x^4)(I + x^8) has intermediates up to ~C(15, 8) times the result for correlated keys and
+    # lost all accuracy in tf32 on long prompts)
+    a = tl.sum(tl.where((o_c == i)[:, None], -x, 0.0), 0)
+    a = tl.where(o_c < i, a, 0.0)
+    a = a + tl.sum(a[:, None] * ai, 0)
+    return tl.where((o_c == i)[:, None], a[None, :], ai)
 
 
 @triton.jit
@@ -547,10 +547,23 @@ def _gdn_kkt_kernel(k, g_raw, g, beta, A, cu_seqlens, chunk_indices, gscale, H: 
         b1 = tl.load(beta + (bos + t1).to(tl.int64) * HV + hv, mask=m1, other=0.0)
         b2 = tl.load(beta + (bos + t2).to(tl.int64) * HV + hv, mask=m2, other=0.0)
         b3 = tl.load(beta + (bos + t3).to(tl.int64) * HV + hv, mask=m3, other=0.0)
-        i00 = _inv16(_gx(kk00, g0, g0, b0, m0, m0, True, o_c), eye, PREC)
-        i11 = _inv16(_gx(kk11, g1, g1, b1, m1, m1, True, o_c), eye, PREC)
-        i22 = _inv16(_gx(kk22, g2, g2, b2, m2, m2, True, o_c), eye, PREC)
-        i33 = _inv16(_gx(kk33, g3, g3, b3, m3, m3, True, o_c), eye, PREC)
+        x00 = _gx(kk00, g0, g0, b0, m0, m0, True, o_c)
+        x11 = _gx(kk11, g1, g1, b1, m1, m1, True, o_c)
+        x22 = _gx(kk22, g2, g2, b2, m2, m2, True, o_c)
+        x33 = _gx(kk33, g3, g3, b3, m3, m3, True, o_c)
+        i00 = -x00
+        i11 = -x11
+        i22 = -x22
+        i33 = -x33
+        for i in range(2, BC):
+            i00 = _fs_row(x00, i00, i, o_c)
+            i11 = _fs_row(x11, i11, i, o_c)
+            i22 = _fs_row(x22, i22, i, o_c)
+            i33 = _fs_row(x33, i33, i, o_c)
+        i00 += eye
+        i11 += eye
+        i22 += eye
+        i33 += eye
         x10 = _gx(kk10, g1, g0, b1, m1, m0, False, o_c)
         x32 = _gx(kk32, g3, g2, b3, m3, m2, False, o_c)
         x20 = _gx(kk20, g2, g0, b2, m2, m0, False, o_c)
@@ -660,8 +673,8 @@ GDN_CHUNK_CFG = {"BV": 64, "num_warps": 4, "num_stages": 3}
 
 
 # (HPP, num_warps). In gdn_prefill (scratch/kkt_small.py) one head per program and 1 warp is best at every size:
-# small steps are one wave, so per-program latency decides (2 chunks: 20.7 us per layer vs 34 us with 3 heads per
-# program, fla 28 us), and at 2k tokens it is still ahead (132 vs 140 us) although kkt alone is faster with 3.
+# small steps are one wave, so per-program latency decides. gdn_prefill per layer (vs fla's kkt): 2 chunks 25.5 us
+# (27.2), 1992 tokens 143 us (163), 4 x 512 129 us (144).
 GDN_KKT_CFG = (1, 1)
 
 
