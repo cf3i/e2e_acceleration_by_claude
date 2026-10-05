@@ -64,7 +64,6 @@ class Step:
     # prefill (npre > 0)
     p_slot: torch.Tensor | None = None     # [npre + 1] slots of the prefill sequences (last ones: padding)
     cu: torch.Tensor | None = None         # [npre + 2] row offsets
-    chunk_off: torch.Tensor | None = None  # [npre + 2] first 64-chunk of each sequence
     chunk_idx: torch.Tensor | None = None  # [nt, 2] (sequence, chunk) of each 64-chunk; padding -> empty seq
     tiles: torch.Tensor | None = None      # [4, n_tiles] attention tiles: tok0, ntok, pos0, slot
 
@@ -196,7 +195,7 @@ class Model:
         ids = torch.where(b.tok >= 0, b.tok, self.last_tok[b.in_slot])
         res = self.embed[ids]
         if b.npre:
-            pre = (b.cu.long(), b.chunk_idx.long(), b.chunk_off.long())
+            pre = (b.cu.long(), b.chunk_idx.long())
         else:
             pre = None
         delta = dscale = None
@@ -225,8 +224,8 @@ class Model:
             q, k, v = K.conv1d_rows(qkv_raw, xs, L["conv_w"], self.conv[li], b.row_start, b.row_seq_slot,
                                     b.seq_slot, b.seq_start, b.seq_len, ns)
             g, beta = K.gdn_gates(a_raw, b_raw, xs, L["A_log"], L["dt_bias"])
-            cu, ci, co = pre
-            o = K.gdn_prefill(q, k, v, g, beta, self.rec[li], b.p_slot, cu, ci, co, b.npre + 1)
+            cu, ci = pre
+            o = K.gdn_prefill(q, k, v, g, beta, self.rec[li], b.p_slot, cu, ci, b.npre + 1)
         else:
             q, k, v = K.conv1d_varlen(qkv_raw, xs, L["conv_w"], self.conv[li], b.seq_slot, b.seq_start, b.seq_len,
                                       ns)

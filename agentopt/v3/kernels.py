@@ -247,6 +247,26 @@ def _conv1d_seq_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, seq
 
 
 @triton.jit
+def _conv_taps(x_ptr, xs_ptr, w_ptr, state_ptr, rows, rm, offs, start, slot, XS, C: tl.constexpr, BT: tl.constexpr,
+               BLOCK_C: tl.constexpr, STATE: tl.constexpr):
+    acc = tl.zeros((BT, BLOCK_C), tl.float32)
+    for k in tl.static_range(4):
+        src = rows - 3 + k
+        fx = src >= start
+        xv = tl.load(x_ptr + src.to(tl.int64)[:, None] * XS + offs[None, :], mask=(rm & fx)[:, None],
+                     other=0.0).to(tl.float32)
+        xv = (xv * tl.load(xs_ptr + src, mask=rm & fx, other=0.0)[:, None]).to(tl.bfloat16).to(tl.float32)
+        if STATE:
+            j = src - start + 3
+            sv = tl.load(state_ptr + (slot * 3 + j)[:, None] * C + offs[None, :],
+                         mask=(rm & (~fx) & (j >= 0))[:, None], other=0.0).to(tl.float32)
+            xv = tl.where(fx[:, None], xv, sv)
+        wk = tl.load(w_ptr + offs * 4 + k)
+        acc += xv * wk[None, :]
+    return acc
+
+
+@triton.jit
 def _conv1d_rows_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, row_start, row_slot, T, XS,
                         QK: tl.constexpr, VC: tl.constexpr, BT: tl.constexpr, BLOCK_C: tl.constexpr,
                         DK: tl.constexpr):
@@ -260,18 +280,11 @@ def _conv1d_rows_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, ro
     offs = c0 + tl.arange(0, BLOCK_C)
     start = tl.load(row_start + rows, mask=rm, other=0)
     slot = tl.load(row_slot + rows, mask=rm, other=0).to(tl.int64)
-    acc = tl.zeros((BT, BLOCK_C), tl.float32)
-    for k in tl.static_range(4):
-        src = rows - 3 + k
-        fx = src >= start
-        xv = tl.load(x_ptr + src.to(tl.int64)[:, None] * XS + offs[None, :], mask=(rm & fx)[:, None],
-                     other=0.0).to(tl.float32)
-        xv = (xv * tl.load(xs_ptr + src, mask=rm & fx, other=0.0)[:, None]).to(tl.bfloat16).to(tl.float32)
-        j = src - start + 3
-        sv = tl.load(state_ptr + (slot * 3 + j)[:, None] * C + offs[None, :], mask=(rm & (~fx) & (j >= 0))[:, None],
-                     other=0.0).to(tl.float32)
-        wk = tl.load(w_ptr + offs * 4 + k)
-        acc += tl.where(fx[:, None], xv, sv) * wk[None, :]
+    # the state gather is expensive: only blocks holding one of the first 3 tokens of a sequence take that path
+    if tl.min(tl.where(rm, rows - start, 3)) < 3:
+        acc = _conv_taps(x_ptr, xs_ptr, w_ptr, state_ptr, rows, rm, offs, start, slot, XS, C, BT, BLOCK_C, True)
+    else:
+        acc = _conv_taps(x_ptr, xs_ptr, w_ptr, state_ptr, rows, rm, offs, start, slot, XS, C, BT, BLOCK_C, False)
     _conv_out(acc, rows, rm, c0, q_out, k_out, v_out, QK, VC, BT, BLOCK_C, DK)
 
 
@@ -327,7 +340,7 @@ def conv1d_rows(x, xs, w, state, row_start, row_slot, seq_slot, seq_start, seq_l
     T, C = x.shape
     assert x.stride(1) == 1
     q, k, v = _conv_outs(T, x.device)
-    BT, BLOCK_C = 16, 256
+    BT, BLOCK_C = 16, 128
     _conv1d_rows_kernel[(triton.cdiv(T, BT), C // BLOCK_C)](x, xs, w, state, q, k, v, row_start, row_slot, T, x.stride(0),
                                                             QK=HK * DK, VC=C - 2 * HK * DK, BT=BT, BLOCK_C=BLOCK_C,
                                                             DK=DK, num_warps=4, launch_pdl=PDL)
@@ -426,14 +439,17 @@ def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows,
 
 
 # ---------------------------------------------------------------- Gated-DeltaNet: chunked prefill
-# fla's chunked algorithm (WY representation) with fla's kernels for the intra-chunk parts and the output; the
-# inter-chunk state recurrence is our own kernel so that the initial / final state is read / written in place in
-# the slot pool (bf16) and padded sequences (length 0) cost nothing. All sizes are fixed by the caller (padded
+# fla's chunked algorithm (WY representation) with fla's kernels for the intra-chunk parts; the inter-chunk state
+# recurrence and the outputs are our own fused kernel, so that the per-chunk states stay in registers, the initial /
+# final state is read / written in place in the slot pool (bf16) and padded sequences (length 0) cost nothing. All sizes are fixed by the caller (padded
 # cu_seqlens / chunk_indices), so the whole step can be captured in a CUDA graph.
 @triton.jit
-def _gdn_chunk_h_kernel(k, v, w, v_new, g, h, state, seq_slot, cu_seqlens, chunk_offsets,
-                        H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr, V: tl.constexpr, BT: tl.constexpr,
-                        BV: tl.constexpr):
+def _gdn_chunk_kernel(q, k, v, w, g, o, state, seq_slot, cu_seqlens, scale,
+                      H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr, V: tl.constexpr, BT: tl.constexpr,
+                      BV: tl.constexpr):
+    """Inter-chunk recurrence fused with the chunk outputs (same arithmetic as fla's chunk_fwd_h + chunk_fwd_o,
+    bf16 states and v_new as MMA inputs): per chunk, v_new = u - w h, o = scale (q h * exp(g) + tril(q k^T * exp(g_i - g_j)) v_new), then
+    h <- h exp(g_last) + k^T (v_new exp(g_last - g)). The per-chunk states never leave registers."""
     gdc_wait()
     i_v, i_nh = tl.program_id(0), tl.program_id(1)
     i_n, i_h = i_nh // HV, i_nh % HV
@@ -441,7 +457,6 @@ def _gdn_chunk_h_kernel(k, v, w, v_new, g, h, state, seq_slot, cu_seqlens, chunk
     T = tl.load(cu_seqlens + i_n + 1).to(tl.int32) - bos
     if T > 0:
         NT = tl.cdiv(T, BT)
-        boh = tl.load(chunk_offsets + i_n).to(tl.int32)
         slot = tl.load(seq_slot + i_n).to(tl.int64)
         o_v = i_v * BV + tl.arange(0, BV)
         o_k1 = tl.arange(0, 64)
@@ -449,50 +464,57 @@ def _gdn_chunk_h_kernel(k, v, w, v_new, g, h, state, seq_slot, cu_seqlens, chunk
         st = state + (slot * HV + i_h) * K * V
         b_h1 = tl.load(st + o_k1[:, None] * V + o_v[None, :]).to(tl.float32)
         b_h2 = tl.load(st + o_k2[:, None] * V + o_v[None, :]).to(tl.float32)
-        h += (boh * HV + i_h).to(tl.int64) * K * V
         v += (bos * HV + i_h).to(tl.int64) * V
+        o += (bos * HV + i_h).to(tl.int64) * V
+        q += (bos * H + i_h // (HV // H)).to(tl.int64) * K
         k += (bos * H + i_h // (HV // H)).to(tl.int64) * K
         w += (bos * HV + i_h).to(tl.int64) * K
-        v_new += (bos * HV + i_h).to(tl.int64) * V
         for i_t in range(NT):
             o_t = i_t * BT + tl.arange(0, BT)
             m_t = o_t < T
-            hp = h + i_t.to(tl.int64) * HV * K * V
-            tl.store(hp + o_k1[:, None] * V + o_v[None, :], b_h1.to(tl.bfloat16))
-            tl.store(hp + o_k2[:, None] * V + o_v[None, :], b_h2.to(tl.bfloat16))
+            h1 = b_h1.to(tl.bfloat16)
+            h2 = b_h2.to(tl.bfloat16)
             b_w = tl.load(w + o_t[:, None] * (HV * K) + o_k1[None, :], mask=m_t[:, None], other=0.0)
-            b_v = tl.dot(b_w, b_h1.to(b_w.dtype))
+            b_v = tl.dot(b_w, h1)
             b_w = tl.load(w + o_t[:, None] * (HV * K) + o_k2[None, :], mask=m_t[:, None], other=0.0)
-            b_v += tl.dot(b_w, b_h2.to(b_w.dtype))
+            b_v += tl.dot(b_w, h2)
             b_v = tl.load(v + o_t[:, None] * (HV * V) + o_v[None, :], mask=m_t[:, None], other=0.0) - b_v
-            tl.store(v_new + o_t[:, None] * (HV * V) + o_v[None, :], b_v.to(tl.bfloat16), mask=m_t[:, None])
-            last_idx = tl.minimum((i_t + 1) * BT, T) - 1
-            b_g_last = tl.load(g + (bos + last_idx).to(tl.int64) * HV + i_h).to(tl.float32)
+            b_q = tl.load(q + o_t[:, None] * (H * K) + o_k1[None, :], mask=m_t[:, None], other=0.0)
+            b_k1 = tl.load(k + o_k1[:, None] + o_t[None, :] * (H * K), mask=m_t[None, :], other=0.0)
+            b_o = tl.dot(b_q, h1)
+            b_A = tl.dot(b_q, b_k1)
+            b_q = tl.load(q + o_t[:, None] * (H * K) + o_k2[None, :], mask=m_t[:, None], other=0.0)
+            b_k2 = tl.load(k + o_k2[:, None] + o_t[None, :] * (H * K), mask=m_t[None, :], other=0.0)
+            b_o += tl.dot(b_q, h2)
+            b_A += tl.dot(b_q, b_k2)
             b_g = tl.load(g + (bos + o_t).to(tl.int64) * HV + i_h, mask=m_t, other=0.0).to(tl.float32)
-            b_v = b_v * tl.where(m_t, tl.exp2(b_g_last - b_g), 0)[:, None]
+            b_o = b_o * tl.exp2(b_g)[:, None]
+            b_A = b_A * tl.exp2(b_g[:, None] - b_g[None, :])
+            b_A = tl.where((o_t[:, None] >= o_t[None, :]) & (m_t[:, None] & m_t), b_A, 0)
+            b_o = b_o * scale + tl.dot(b_A.to(tl.bfloat16), b_v.to(tl.bfloat16)) * scale
+            tl.store(o + o_t[:, None] * (HV * V) + o_v[None, :], b_o.to(tl.bfloat16), mask=m_t[:, None])
+            b_g_last = tl.load(g + (bos + tl.minimum((i_t + 1) * BT, T) - 1).to(tl.int64) * HV + i_h).to(tl.float32)
+            b_v = (b_v * tl.where(m_t, tl.exp2(b_g_last - b_g), 0)[:, None]).to(tl.bfloat16)
             b_g_last = tl.exp2(b_g_last)
-            b_h1 *= b_g_last
-            b_h2 *= b_g_last
-            b_v = b_v.to(tl.bfloat16)
-            b_k = tl.load(k + o_k1[:, None] + o_t[None, :] * (H * K), mask=m_t[None, :], other=0.0)
-            b_h1 += tl.dot(b_k, b_v)
-            b_k = tl.load(k + o_k2[:, None] + o_t[None, :] * (H * K), mask=m_t[None, :], other=0.0)
-            b_h2 += tl.dot(b_k, b_v)
+            b_h1 = b_h1 * b_g_last + tl.dot(b_k1, b_v)
+            b_h2 = b_h2 * b_g_last + tl.dot(b_k2, b_v)
         tl.store(st + o_k1[:, None] * V + o_v[None, :], b_h1.to(tl.bfloat16))
         tl.store(st + o_k2[:, None] * V + o_v[None, :], b_h2.to(tl.bfloat16))
 
 
-GDN_CHUNK_H_CFG = {"BV": 32, "num_warps": 4, "num_stages": 2}
+# (BV 16/32 with num_warps >= 4 and num_stages=1 miscompile in Triton 3.6: out-of-bounds shared read)
+GDN_CHUNK_CFG = {"BV": 32, "num_warps": 2, "num_stages": 2}
 
 
-def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, chunk_offsets, n_seqs,
+
+
+def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, n_seqs,
                 scale=128 ** -0.5):
     """Chunked gated delta rule over varlen sequences in rows [0, cu_seqlens[-1]) of q/k [T, HK, DK],
     v [T, HV, DV], g/beta fp32 [T, HV]; state [S, HV, DK, DV] bf16 indexed by seq_slot (updated in place).
-    cu_seqlens [n_seqs + 1], chunk_indices [NT, 2], chunk_offsets [n_seqs + 1] (int64, fixed sizes; padded
+    cu_seqlens [n_seqs + 1], chunk_indices [NT, 2] (int64, fixed sizes; padded
     sequences have length 0, padded chunk entries point to a padded sequence). Returns o [T, HV, DV] (rows outside
     the sequences are undefined)."""
-    from fla.ops.common.chunk_o import chunk_fwd_o
     from fla.ops.gated_delta_rule.chunk_fwd import chunk_gated_delta_rule_fwd_intra
     from fla.ops.utils import chunk_local_cumsum
     from fla.ops.utils.constant import RCP_LN2
@@ -502,15 +524,12 @@ def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, ch
     gc = chunk_local_cumsum(g, chunk_size=64, scale=RCP_LN2, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices)
     w, u, _ = chunk_gated_delta_rule_fwd_intra(k=k, v=v, g=gc, beta=beta, cu_seqlens=cu_seqlens,
                                                chunk_indices=chunk_indices, chunk_size=64)
-    NT = chunk_indices.shape[0]
-    h = k.new_empty(1, NT, HV, DK, DV)
-    v_new = torch.empty_like(u)
-    c = GDN_CHUNK_H_CFG
-    _gdn_chunk_h_kernel[(DV // c["BV"], n_seqs * HV)](k, u, w, v_new, gc, h, state, seq_slot, cu_seqlens,
-                                                      chunk_offsets, H=HK, HV=HV, K=DK, V=DV, BT=64, BV=c["BV"],
-                                                      num_warps=c["num_warps"], num_stages=c["num_stages"],
-                                                      launch_pdl=PDL)
-    o = chunk_fwd_o(q=q, k=k, v=v_new, h=h, g=gc, scale=scale, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices)
+    o = torch.empty_like(v)
+    c = GDN_CHUNK_CFG
+    _gdn_chunk_kernel[(DV // c["BV"], n_seqs * HV)](q, k, u, w, gc, o, state, seq_slot, cu_seqlens, scale,
+                                                   H=HK, HV=HV, K=DK, V=DV, BT=64, BV=c["BV"],
+                                                   num_warps=c["num_warps"], num_stages=c["num_stages"],
+                                                   launch_pdl=PDL)
     return o[0]
 
 

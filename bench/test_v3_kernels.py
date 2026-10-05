@@ -215,12 +215,8 @@ ci = [(i, t) for i, n in enumerate(lens_p) for t in range((n + 63) // 64)]
 ci += [(2, 0)] * 5  # padded chunk entries -> zero-length sequence
 ci_t = torch.tensor(ci, dtype=torch.long, device=dev)
 cu_t = torch.tensor(cu, dtype=torch.long, device=dev)
-co = [0]
-for n in lens_p:
-    co.append(co[-1] + (n + 63) // 64)
 rec_p2 = rec_p.clone()
-po = K.gdn_prefill(pq, pk, pv, pg, pb, rec_p2, t32(slots_p), cu_t, ci_t, torch.tensor(co, dtype=torch.long,
-                   device=dev), len(lens_p))
+po = K.gdn_prefill(pq, pk, pv, pg, pb, rec_p2, t32(slots_p), cu_t, ci_t, len(lens_p))
 real = [i for i, n in enumerate(lens_p) if n]
 cu_r = torch.tensor([0] + list(torch.tensor([lens_p[i] for i in real]).cumsum(0)), dtype=torch.long, device=dev)
 ro, rht = chunk_gated_delta_rule(pq[None, :cu[-1]], pk[None, :cu[-1]], pv[None, :cu[-1]], pg[None, :cu[-1]],
