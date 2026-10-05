@@ -138,7 +138,9 @@
 **7. 噪声底线。**
 - 到最后，一次运行的方差（fp8 batch 耦合导致链长变化）就已经与一步优化的收益相当，这时需要多次重复取中位数。
 
-## 5. 现在的瓶颈与（范围之外的）下一步
+## 5. Phase 2 结束时的瓶颈与（当时范围之外的）下一步
+
+Phase 3 做了其中的 kernel 工作，见第 7 节。
 
 p2_s10 的情况：
 - makespan ≈ 最长 agent（task 423）的约 1000 个 token-step；
@@ -161,4 +163,126 @@ slurm/submit.sh bench p2_s10_force_all --engine p2_s10 --runner continuous_async
 slurm/submit.sh profile_batch p2_s10_force_all --engine p2_s10     # nsys + per-bucket timings
 slurm/submit.sh vllm ref_vllm_fp8 --quantization fp8               # vLLM venv: /mnt/data/u/feic/pjs/venvs/vllm
 python bench/report.py                                              # results/summary.csv
+```
+
+
+---
+
+# 7. Phase 3：系统优化逼近物理极限
+
+**约束变化**
+- 允许写 kernel，但只做**通用**优化：要对生产环境里各种 prompt 都成立，不做针对 workload 的特化；Phase 2 的 forced-token prefill 被真正的 chunked prefill + paged KV 取代。
+- 精度固定：FP8 per-tensor 线性层，bf16 lm_head / KV / 循环状态，greedy。
+- 不做 MTP / speculative decoding：优化的是系统，不改优化对象。
+- 去掉 task 423（512 token 封顶、一直答错的复读 outlier），127 题。
+- 新增第二个 workload `gsm8k_longctx_128`：1k–7k token 的长 prompt，没有共享前缀，用来检验通用性。
+
+## 7.1 结果
+
+| stage（commit） | 主要内容 | 127-task (s) | longctx (s) | accuracy (127 / longctx) |
+|---|---|---|---|---|
+| p3_s00_rebaseline（p2_s10） | Phase 2 终点，去掉 423 | 18.19 | — | 0.945 / — |
+| v3 引擎 dev（3252fc5） | 自写 forward + 异步调度 + chunked prefill + paged KV | 10.95（dev） | 51.5（dev） | |
+| p3_s01_kernels（2defad5） | + attention / silu kernel、合并小 M FP8 GEMM、runner、PDL、GDN 融合 | 8.86 | 40.64 | 0.945 / 0.945 |
+| p3_s02_gdnchunk | + GDN chunk 配置 | 8.77 | 39.61 | |
+| p3_s04_gdnfuse（0abefc7） | + w/u 不落 HBM | 8.47 | 40.83 | |
+| p3_s05_kkt（0b442cc） | kkt 改为 tf32 求逆 → **数值事故** | 8.99 | 77.8 | 0.945 / **0.417** |
+| p3_s06_kktfix（097cd7f） | 对角块 fp32 前代修复 | 9.45 | 40.46 | 0.945 / 0.953 |
+| p3_s07_fa3conv（321c65f） | + 双流、FA3 prefill attention、decode conv 融合 | 8.46 | 39.00 | 0.945 / 0.937 |
+| p3_s08_final（49b693b） | + no workspace、gdn 调度、Aq 移出链、decode 预取 | 9.98（task 428 变长，见下） | 38.21 | 0.945 / 0.937 |
+| **p3_s08_final_replay**（同代码，按 p3_s07 的轨迹 replay） | 只测系统速度 | **8.36** | **38.17** | （replay 不测 accuracy） |
+| vLLM 0.30 fp8（同 workload） | | 17.54 | 91.96 | 0.945 / 0.953 |
+
+- 127-task：18.19 → 8.36 s（2.2×）；longctx：51.5 → 38.2 s（1.35×）。从项目开始算，127-task 的 makespan 是 baseline（1673.6 s，含 task 423）的约 1/200。
+- 对 vLLM：127-task 快 2.1×，longctx 快 2.4×，accuracy 相同或在噪声内。
+- p3_s08 正常 run 的 127-task 是 9.98 s：每步的时间与 replay 完全一样（B=1 都是 11.0 ms），但 task 428 这次生成得更长，单它就跑了 9.86 s，最后有 151 个只剩它一行的 step。
+  - 原因：per-tensor FP8 下 batch 组成会改变数值，从而改变轨迹；这次 47 个 task 的文本变了，accuracy 不变。
+  - makespan = 最慢 task 的延迟，所以一个 task 的轨迹就能让结果偏差 ±1.5 s。系统速度要看 replay。
+- 正式 run 之间的差异不能直接读成优化收益：
+  - 不同节点之间有 2–3% 的差异（例如 p3_s03 8.98 s vs p3_s02 8.77 s）；
+  - 舍入变化会改变某个 task 的生成长度：p3_s06 的 9.45 s 是 task 428 从 391 token 变成了 581 token，系统并没有变慢。
+- 每一步的真实收益来自同 GPU 的 replay A/B（见 7.3），记录在 `OPTIMIZATION_LOG.md` 的 Phase 3 表里。
+
+## 7.2 做了什么（按收益排序）
+
+**A. 引擎架构（收益最大：18.2 → 约 9 s）**
+- 自己写 forward，不再依赖 HF；token 预算调度，chunked prefill 与 decode 行混在一个 step 里；paged KV；每个 step 都是 CUDA graph（按行数分 bucket）。
+- 异步调度：CPU 准备下一步时 GPU 还在跑上一步；runner 去掉每段计时的 device sync，tokenization 改成增量。
+- 结果：127-task 的 GPU ledger 是 8.36 s busy、0.07 s idle，host 端已经做完。
+
+**B. kernel（约 9 → 8.4 s；longctx 44.6 → 38.7 s）**
+- 小 M 的 FP8 GEMM：同一输入的线性层合并（gate|up、qkv|z|b|a），用 Triton 实现，每层少几次 launch、读一次输入。
+- 所有 kernel 都开 PDL（programmatic dependent launch），kernel 之间的空隙降到约 0.5 µs。
+- GDN（48 层线性注意力）：
+  - chunk 递推与输出融合，w/u 不落 HBM；
+  - kkt 和三角求逆放到 tensor core 上，对角块保留 fp32 前代；
+  - intra-chunk 的 q·kᵀ 移出串行链；
+  - decode 时 conv 融进 GEMM epilogue，l2norm 融进 gdn_decode；
+  - gdn_decode 寄存器预取。
+- attention：prefill 用 FA3（自己从源码编译，paged、varlen），decode 用 split-KV。
+- mixed step 双流：prefill 行的 GDN / attention 和 decode 行并发执行（graph 内并行分支）。
+- cuBLASLt 不分配 workspace：选 static-schedule kernel，graph 里不再有 memset 节点打断 PDL 链（longctx −1.1%）。
+
+**C. 没有收益或负收益的尝试（都有测量，见 log）**
+- 自写大 GEMM 加融合 epilogue：精度对齐 cuBLAS 时，Triton 684 µs、CUTLASS 567 µs，cuBLAS 504 µs。fast-accum 更快，但误差是 3 倍，算换精度。
+- nano-batching：M 切小后 GEMM 的效率损失比藏住的访存时间还多。
+- chunk kernel 的 producer/consumer 拆分、L2 预取下一个 GEMM 的权重、提前 trigger、split-K、各种 config 扫描。
+
+## 7.3 学到的东西
+
+1. **数值正确性要用"病态"输入测，并且由长上下文 accuracy 把关。**
+   - 0b442cc 用 (I+Y)⁻¹ = (I−Y)(I+Y²)(I+Y⁴)(I+Y⁸) 在 tf32 下求逆。随机 key 下误差和 fla 一样，127-task accuracy 也没变。
+   - 但真实的 chunk 内 key 高度相关，这个乘积公式数值不稳定：longctx accuracy 从 0.945 掉到 0.417。
+   - 127-task 上它只表现为"某个 task 变长了"，被我当成舍入噪声放过了。
+   - 之后的规矩：改变数值的改动必须先跑 longctx accuracy；单元测试加了相关 key 的 case。能做到 bit-exact 的改动尽量做到 bit-exact。
+2. **测量方法本身是一项工程。**
+   - 节点间 2–3% 的差异、轨迹变化带来的 ±1 s，都比单项优化的收益大。
+   - 为此做了 `--replay`：强制按录制好的 token 序列走，同 GPU 交替跑 A/B，重复性做到 ±0.005 s（127）/ ±0.05 s（longctx）。
+   - accuracy 仍然用正常的 run 测。longctx 的 accuracy 本身有 ±0.02 的噪声：同一份代码跑出过 0.937 到 0.961。
+3. **功耗墙。**
+   - longctx 的 mixed step 跑在功耗上限附近（约 630–690 W，SM 频率约 1.6 GHz，不是 1.98 GHz），cuBLAS FP8 约 1.35 PFLOPS。
+   - 后果：
+     - 孤立 micro 的结论在模型里不一定成立，访存 kernel 必须在模型里调参；
+     - 两个分支各自都填满 GPU 时，并发几乎不省时间；
+     - 真正的下限是每个 step 的能量，而不只是每个 kernel 的时间。
+4. **"能写 kernel"不等于"能比库快"。**
+   - cuBLAS 的 FP8 GEMM 在精确累加下是我们用 Triton 和 CUTLASS 都追不上的。
+   - 所有"融合进 GEMM epilogue"的方案，前提都是先有一个同样快的 GEMM。
+5. **大收益来自架构，kernel 收益是递减的。**
+   - 引擎重写贡献了约 2×；之后几十个 kernel 改动加起来约 7%（127-task）/ 13%（longctx）。
+   - 最后几个小时的改动都在 1% 以内，信号是：到墙了。
+
+## 7.4 离物理极限还有多远
+
+**127-task**
+- SOL 模型：一步 ≈ 26.9 GB 权重 / 3.0 TB/s + B ×（state + KV 字节）/ 3.0 TB/s，即约 9.0 + 0.063·B ms。按最长链 647 token 算，makespan SOL ≈ **7.1 s**。现在 8.36 s（replay），即 SOL 的约 85%。
+- 剩下的差距主要在小 batch decode：B ≤ 16 的 step 占 GPU 时间的一半，每步约 11 ms，下限约 8.4 ms。
+  - GEMM 约为读带宽下限的 93%；
+  - 每层约 20 µs 是延迟型小 kernel（add_rmsnorm ×2、gated_norm、silu、gdn_decode），只能靠更少的 kernel 来消除。
+
+**longctx**
+- mixed step（约 2048 token）约 110 ms，其中：
+  - cuBLAS GEMM 75 ms，已在功耗墙下的峰值；
+  - silu / rmsnorm 约为带宽的 90%；
+  - FA3 6.1 ms；
+  - GDN 约 10 ms：串行链 + 双流争用，比理想值多约 2 ms。
+- 只算 GEMM 算力的下限约 21 s，我们 38.2 s。差距主要是这些访存 / 延迟型部分；在功耗上限下它们无法与 GEMM 重叠（nano-batching 实测是负收益）。
+
+## 7.5 再往下走需要什么（都是"好几天"量级）
+
+| 方向 | 预期 | 难点 |
+|---|---|---|
+| 小 batch decode 的 persistent megakernel | 127-task 的小 batch step 最多快 15–20%，整体约 8–10% | 跨层调度、grid 级同步、与 graph/PDL 共存 |
+| GDN 的 persistent kernel（chain 与 decode tile 统一调度） | mixed step 约 2% | Triton 表达力不够，需要 CUDA |
+| 精确累加且与 cuBLAS 一样快的 FP8 GEMM + 融合 epilogue | mixed step 约 3% | 需要手写 Hopper mainloop（分段 promote 以省寄存器） |
+| 约束之外：MTP / speculative、更低精度 | 最大的杠杆 | 改变了优化对象，本项目不做 |
+
+## 7.6 复现
+
+```bash
+slurm/submit.sh bench p3_s08_final --engine p3_a1 --runner v3 --exclude-tasks 423
+slurm/submit.sh bench p3_s08_final_longctx --engine p3_a1 --runner v3 --exclude-tasks 423 --data gsm8k_longctx_128
+# 同 GPU 速度 A/B（replay 同一轨迹）：
+scratch/mktree.sh <revA>; scratch/mktree.sh <revB>
+EXTRA='--replay <abs results dir>' bash /mnt/data/u/feic/tmp_ab/ab.sh <data> <rounds> <revA> <revB>
 ```

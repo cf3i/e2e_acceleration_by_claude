@@ -181,6 +181,11 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
 | decode-step causal conv1d fused into the gdn_in GEMM epilogue, q/k l2-norm into gdn_decode (321c65f) | replay A/B: 8.414 → 8.380 s | |
 | prefill attention by FA3 (built from source, paged, varlen) on the side stream (321c65f) | | mixed step 116.2 → 114.3 ms; both: replay A/B 39.17 → 38.90 s |
 | official p3_s07_fa3conv / _longctx (321c65f) | 8.458 s (acc 0.945) | 39.00 s (acc 0.937, see below) |
+| no cuBLASLt workspace: static nvjet kernels, no memset node breaking PDL (b692a7c) | replay A/B 8.468 → 8.422 s | 39.29 → 38.87 s |
+| gdn gates in kkt, conv state update off the chain, gdn ordering (6892413) | 8.417 → 8.410 s | 38.86 → 38.68 s |
+| conv scalar test, intra-chunk attention off the chunk chain (c357466 → c6ee482) | 8.425 → 8.415 s | 38.80 → 38.70 s |
+| gdn_decode next-head register prefetch (15d508e; dev GPU h100-2) | 8.420 → 8.365 s | 38.73 → 38.67 s |
+| **official p3_s08_final / _longctx (49b693b = 15d508e + scratch)** | 9.98 s (acc 0.945; task 428 9.86 s, a trajectory change) / replay of p3_s07: **8.36 s** | 38.21 s (acc 0.937) / replay: **38.17 s** |
 | vLLM 0.30 fp8, same workloads | 17.54 s | 91.96 s |
 
 ## Where the time is vs physics (2defad5 + 01fe367)
@@ -352,3 +357,48 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
 - Power is a wall: in the longctx run the busy GPU averages ~631 W (limit 700), SM clock mean ~1620 MHz, min
   1350 (max 1980). Shortening a low-power latency-bound phase speeds it up but leaves less of the energy budget
   for the GEMMs; the floor is energy per step, not only time per kernel.
+
+## gdn_decode register prefetch (15d508e) and the floors around it
+- ncu of gdn_decode (56 rows, `scratch/decncu.py`): 27% of the stall samples were the state store waiting on the
+  plain load of v (the a / b / v loads of a head are issued after its state tile). v, a, b of the next head now
+  load one head early into registers (`PF`, bit-exact): 56 rows 69.6 → 66.9 us, 96 rows 114 → 110 us
+  (`scratch/decpf.py`). `AGENTOPT_GDN_DECODE_PF=0` restores the old order.
+- Floor: a copy kernel with the same grid / tiles that only reads each state tile and writes it back
+  (`scratch/decfloor.py`) reaches ~2.9 TB/s; gdn_decode is 4–7% above it.
+- Replay A/B c6ee482 → 15d508e (dev GPU h100-2, 2 rounds): longctx 38.68 / 38.78 → 38.65 / 38.68 s (−0.15%),
+  127-task 8.416 / 8.424 → 8.375 / 8.355 s (−0.65%; small decode steps are where gdn_decode is on the critical
+  path). Accuracy identical (bit-exact).
+
+## Mixed-step GDN branch: why prefill ∥ decode is 161 us, not ~120 (`scratch/ovl.py`, `ovlprof.py`)
+- Per layer of a 1992 + 56-row step: kkt 44 us alone (forward substitution ~14, block merges ~3.5, Aq programs
+  2–7, the rest loads / k k^T), chunk 73 us alone, gdn_decode 67 us alone; concurrently 161 us vs ~120 ideal.
+- Cause: the chunk kernel's 189 KB of smem on 96 SMs leaves room for one decode CTA per SM there; decode slows
+  68 → ~106 us, chunk 73 → 88 us. Chunk configs with less smem (stages, BV) lose more on the chain than they
+  give back; decode config sweeps, kkt warps / HPP / maxnreg: no gain (`scratch/kktt.py`, `smem.py`).
+- Left: ~40 us per GDN layer (~1.9 ms per mixed step, ~1.7%) and ~9 us of kkt forward substitution — both need
+  a different kernel structure (one persistent kernel scheduling chain and decode tiles), not tuning.
+
+## Fused epilogues for the large GEMMs: no GEMM to fuse into (negative)
+- Target: silu_mul_quant (4.3 ms per mixed step) and add_rmsnorm (4.0 ms), both ~90% of HBM bandwidth; fused
+  into the gate_up / down / out epilogues they would save ~1.5% each — if the fused GEMM matched cuBLAS.
+- gate_up at M = 2048 (N 34816, K 5120), relative max error vs fp32 on 256 rows:
+  cuBLAS 504 us (1448 TFLOPS, err 2.2e-3). Triton persistent TMA (`scratch/mmbig.py`): default (fast) fp8
+  accumulation err 6.6e-3; with fp32 promotion every 128 products (`max_num_imprecise_acc=128`, = cuBLAS
+  precision) 684 us. CUTLASS 4.3 sm90 warp-specialized (`scratch/cutmm/`, 12 schedules): precise accumulation
+  best 567 us (128×128 cooperative, cluster 1×1); 128×256 tiles spill (two accumulators) and run at ~1500 us;
+  FP8FastAccum 483 us but err 6.3e-3 (down: 1.1e-2). cuBLAS has a precise-accumulation mainloop we do not.
+  Losing ≥ 63 us per GEMM to save ~27 us of silu: not done. Fast accumulation is a precision change: not done.
+- Small M (decode, B ≤ 16): Triton down / out GEMMs (N 5120) are 5–8% slower than cuBLAS (down 34.1 vs 32.4 us,
+  out 14.6 vs 13.7, `scratch/mmn5120.py`), which eats most of what fusing silu / gnorm into them would save.
+
+## Nano-batching (negative, `scratch/nano.py`)
+- Idea: split a 2048-row mixed step so bandwidth-bound kernels of one half hide under the other half's GEMM.
+  gate_up at M 1024 runs 261.5 us (2 × = 523 vs 504 at M 2048); silu hides only 24% under it. At M 512 silu hides
+  89%, but the GEMM is 24% less efficient. Net loss either way under the power cap.
+
+## Small-batch decode vs its floor (127-task)
+- Half of the 127-task GPU time is decode steps with ≤ 16 rows at ~11 ms per step (`scratch/stepcat.py`); the
+  weight-read floor is ~8.4 ms. B = 1 per GDN layer (`scratch/tl_dec.py`): GEMMs 137.6 us (gdn_in 31, out 13.2,
+  gate_up 60.5, down 32.4; floor at 3.0 TB/s ~128), small latency-bound kernels ~20 us (add_rmsnorm 3.6 × 2,
+  gdn_decode 4.9, gated_norm 3.4, silu 4.9). Kernels start within ~0.5 us of their predecessor (PDL): the
+  20 us is execution latency, so only fewer kernels (fusion / a persistent megakernel) close it.
