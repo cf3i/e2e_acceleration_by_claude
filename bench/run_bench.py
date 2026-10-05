@@ -3,6 +3,7 @@
     python bench/run_bench.py --stage stage00_baseline --engine naive --runner serial
 """
 import argparse
+import functools
 import json
 import os
 import statistics
@@ -24,6 +25,20 @@ from agentopt.timing import Timer  # noqa: E402
 def load_tasks(n, exclude=(), data="gsm8k_128"):
     with open(ROOT / "data" / f"{data}.jsonl") as f:
         return [t for t in map(json.loads, f) if t["id"] not in exclude][:n]
+
+
+def load_replay(run_dir, tok):
+    """{(task id, turn): generated token ids} of a finished run (gen_ids, else its transcripts re-tokenized)."""
+    run_dir = Path(run_dir)
+    turns = [json.loads(l) for l in open(run_dir / "turns.jsonl")]
+    if all("gen_ids" in t for t in turns):
+        return {(t["task_id"], t["turn"]): t["gen_ids"] for t in turns}
+    rep = {}
+    for r in map(json.loads, open(run_dir / "transcripts.jsonl")):
+        msgs = [m["content"] for m in r["messages"] if m["role"] == "assistant"]
+        for i, c in enumerate(msgs, 1):
+            rep[(r["task_id"], i)] = tok.encode(c, add_special_tokens=False)
+    return rep
 
 
 def pct(xs, q):
@@ -98,6 +113,8 @@ def main():
     ap.add_argument("--max-turns", type=int, default=6)
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--out", default=None, help="default: results/<stage>")
+    ap.add_argument("--replay", default=None, help="results dir: force its generated tokens (timing A/Bs that "
+                    "follow one trajectory whatever the numerics; v3 runner; accuracy is then that run's)")
     args = ap.parse_args()
 
     out = Path(args.out or ROOT / "results" / args.stage)
@@ -109,6 +126,8 @@ def main():
     engine = make_engine(args.engine, device=args.device)
     load_s = time.perf_counter() - t0
     print(f"engine loaded in {load_s:.1f}s", flush=True)
+    if args.replay:
+        runner = functools.partial(runner, replay=load_replay(args.replay, engine.tok))
 
     # Warmup (not measured): one full task.
     runner(engine, tasks[:1], Timer(), args.max_new_tokens, args.max_turns)

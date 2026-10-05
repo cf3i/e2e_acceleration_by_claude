@@ -186,12 +186,12 @@ class PromptEncoder:
         self.cache.pop(id(st), None)
 
 
-def run_v3(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6, tool_workers: int = 8):
+def run_v3(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6, tool_workers: int = 8, replay=None):
     """Phase 3 (V3Engine): turns are submitted without blocking; every `step()` runs one mixed forward (decode
     rows + prefill chunks) and returns the tokens of the previous step plus the slots whose turn ended. Tool calls
     run in a thread pool. New tasks are admitted while a slot is free, the KV cache can take them and the prefill
     backlog is under two steps' token budget (more cannot be fed sooner; tokenizing prompts early would only delay
-    the next step)."""
+    the next step). replay: {(task id, turn): generated token ids}, forced (V3Engine.submit), for timing A/Bs."""
     tok = engine.tok
     encode = PromptEncoder(tok)
     # sections must not synchronize the device: the engine keeps one step in flight while the CPU works (a sync
@@ -214,7 +214,7 @@ def run_v3(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6, 
             with timer("template"):
                 ids = encode(st)
         limit = min(max_new_tokens, engine.room(len(ids)))
-        engine.submit(slot, ids, limit)
+        engine.submit(slot, ids, limit, None if replay is None else replay.get((st.task["id"], st.turns + 1), []))
         live[slot] = {"st": st, "t_task": t_task, "ids": ids, "gen": [], "t0": time.perf_counter(), "decode_s": 0.0}
 
     def finish_turn(slot):
@@ -228,7 +228,7 @@ def run_v3(engine, tasks, timer, max_new_tokens: int = 512, max_turns: int = 6, 
         call = st.observe(text)
         rec = {"task_id": st.task["id"], "turn": st.turns, "prompt_len": len(run["ids"]), "gen_len": len(gen),
                "prefill_s": 0.0, "decode_s": run["decode_s"], "turn_s": time.perf_counter() - run["t0"],
-               "tool_s": 0.0, "stopped": stopped}
+               "tool_s": 0.0, "stopped": stopped, "gen_ids": gen}
         turns.append(rec)
         if call is not None:
             pending[pool.submit(_timed_execute, call)] = (slot, st, run["t_task"], rec)

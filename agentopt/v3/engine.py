@@ -77,6 +77,7 @@ class Session:
         self.gen = 0
         self.limit = 0
         self.t_submit = 0.0
+        self.force = None     # replay: the tokens this turn emits instead of the sampled ones
 
 
 class V3Engine:
@@ -90,7 +91,8 @@ class V3Engine:
                         "buckets": list(buckets), "mixed_buckets": list(mixed_buckets), "npre": npre,
                         "cuda_graph": cuda_graph}
         self.tok = AutoTokenizer.from_pretrained(model_path)
-        self.stop_ids = {self.tok.convert_tokens_to_ids("<|im_end|>"), self.tok.convert_tokens_to_ids("<|endoftext|>")}
+        self.im_end = self.tok.convert_tokens_to_ids("<|im_end|>")
+        self.stop_ids = {self.im_end, self.tok.convert_tokens_to_ids("<|endoftext|>")}
         self.num_slots, self.TB, self.BS, self.dev = num_slots, token_budget, block_size, device
         self.NPRE = npre
         self.max_blocks = max_len // block_size
@@ -190,8 +192,11 @@ class V3Engine:
             s.hist = []
         s.n_pos = len(s.hist)
 
-    def submit(self, slot: int, input_ids: list[int], max_new: int = 512):
-        """Starts a turn: the session will feed input_ids (beyond what it already fed) and generate up to max_new."""
+    def submit(self, slot: int, input_ids: list[int], max_new: int = 512, force: list[int] | None = None):
+        """Starts a turn: the session will feed input_ids (beyond what it already fed) and generate up to max_new.
+        force (replay, for timing A/Bs): the turn emits these tokens (then <|im_end|>) instead of the sampled ones,
+        so the run follows a recorded trajectory whatever the numerics. The device still feeds the sampled tokens
+        (the state holds them: same work per step, wrong values, fine for timing); the host sees the forced ones."""
         s = self.sessions.get(slot)
         if s is None:
             s = self.sessions[slot] = Session(slot)
@@ -205,7 +210,7 @@ class V3Engine:
             self._reset_state(s, input_ids)
         s.todo = list(input_ids[len(s.hist):])
         assert s.todo, "empty turn"
-        s.phase, s.gen, s.limit, s.turn = PREFILL, 0, max_new, s.turn + 1
+        s.phase, s.gen, s.limit, s.turn, s.force = PREFILL, 0, max_new, s.turn + 1, force
         s.t_submit = time.perf_counter()
 
     def suspend(self, slot: int):
@@ -455,6 +460,8 @@ class V3Engine:
             s = self.sessions.get(slot)
             if s is None or s.turn != turn or s.phase != DECODE:
                 continue  # turn already ended (this is the sample after its last token)
+            if s.force is not None:
+                t = s.force[s.gen] if s.gen < len(s.force) else self.im_end
             s.hist.append(t)
             s.gen += 1
             out[slot] = t

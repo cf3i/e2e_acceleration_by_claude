@@ -174,8 +174,10 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
 | gdn_decode tiers tuned in-model under the power cap (3eaf6fe; official p3_s03_inmodel) | 8.67 s (A/B) | 39.8 s (A/B, noisy) |
 | GDN prefill: recompute_w_u fused into the chunk recurrence (0abefc7; official p3_s04_gdnfuse 8.47 / 40.83 s) | 8.59 s (A/B) | mixed step −1.8 ms |
 | GDN kkt + inverse on tensor cores, cumsum fused, no memsets (0b442cc; official p3_s05_kkt 8.99 s) | **broken**: longctx acc 0.417 (p3_s05_kkt_longctx 77.8 s) | unstable tf32 inverse, see below |
-| kkt diagonal blocks by fp32 forward substitution (097cd7f; official p3_s06_kktfix) | pending | pending |
+| kkt diagonal blocks by fp32 forward substitution (097cd7f; official p3_s06_kktfix) | 9.45 s (acc 0.945; task 428 now 581 tokens, see replay below) | 40.46 s (acc 0.953) |
 | packed bf16 rounding (_rbf16), bit-exact (1e84d12) | mixed step 114.25 → 113.80 ms | |
+| mixed steps: prefill-row GDN / attention kernels on a side stream, concurrent with decode rows (6b5d5f5) | replay A/B: 8.486 → 8.429 s | replay A/B: 39.87 → 39.32 s |
+| replay A/B, 0abefc7 → 6b5d5f5 (same GPU, same trajectories, 2 rounds each) | 8.515 → 8.429 s (−1.0%) | 40.13 → 39.32 s (−2.0%) |
 | vLLM 0.30 fp8, same workloads | 17.54 s | 91.96 s |
 
 ## Where the time is vs physics (2defad5 + 01fe367)
@@ -191,7 +193,8 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
 - L2 prefetch of the next weights (`cp.async.bulk.prefetch.L2` before gdc_wait): per-element slower, bulk neutral.
 - Early `griddepcontrol.launch_dependents`: slower at B ≥ 64.
 - Two streams in mixed steps (decode rows ∥ prefill rows): GDN kernels never overlapped, attention 0.9 of 4.5 ms;
-  step time unchanged — both sides already fill every SM.
+  step time unchanged — both sides already fill every SM. (Phase 3 retry with the side stream at high priority
+  and all kernels on PDL: kept, see 6b5d5f5 / "Streams" below.)
 - Triton GEMMs for down/out projections or large-M wide GEMMs: slower than cuBLAS.
 - gdn_decode with both reductions on the old state in one pass: same speed (bytes-bound, not reduction-bound).
 - Lesson (benchmarks): Triton `do_bench` flushes L2 and leaves dirty lines that skew 30–60 µs kernels; time in
@@ -205,6 +208,22 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
 - longctx makespan depends on the scheduling trajectory (620–756 steps across runs of nearby revisions; one run
   even had a different accuracy 0.953 from a different batch composition): judge kernels by per-step GPU time
   (`scratch/prof_mixed.py`) instead.
+
+## Measurement: trajectory replay (`run_bench.py --replay <results dir>`)
+- The 127-task makespan is the latency of the slowest task: p3_s06_kktfix 9.45 s vs p3_s04 8.47 s is task 428
+  generating 581 instead of 391 tokens (7.15 → 9.31 s end to end; total generated tokens +1.7%, steps 515 → 593,
+  GPU time per step 16.3 → 15.7 ms). Any rounding change moves it by ±1 s, more than any one optimization.
+- `--replay` forces a recorded run's generated tokens (turns.jsonl `gen_ids`, else its transcripts re-tokenized):
+  the host sees the recorded tokens (stops, tool calls, next prompts all follow the recording), the device still
+  feeds its own samples (same work per step). Same-GPU A/B with replay is reproducible to ±0.005 s (127-task) /
+  ±0.05 s (longctx), and isolates system speed from numerics. Accuracy still comes from normal runs.
+
+## Streams (6b5d5f5)
+- In a mixed step, the prefill-row GDN kernels (kkt + chunk) and attention prefill run on a high-priority side
+  stream, concurrent with gdn_decode / attn_decode (disjoint rows and state slots; parallel branches of the CUDA
+  graph; bit-exact). Big steps (2k tokens): the sections shorten (gdn 246 → 227 us, attn 821 → 731 us per layer)
+  but the step does not — power-capped, energy per step is the bound. Small steps (B=40, 40 prefill rows):
+  20.6 → 20.0 ms. End to end (replay A/B): 127-task −0.7%, longctx −1.4%.
 
 ## The power wall (longctx)
 - Mixed steps run at ~690 of 700 W (throttle reason SW power cap), SM clock ~1.55–1.6 GHz instead of 1.98.
