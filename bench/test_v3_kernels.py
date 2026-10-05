@@ -68,9 +68,10 @@ q2, s2 = K.silu_mul_quant(gu[:, :N], gu[:, N:], ds)
 check("silu_mul_quant strided", deq(q2, s2), deq(q, s), 0)
 
 # ---- small-M merged FP8 GEMM (per-column scales) vs torch._scaled_mm per part
-for M in (1, 13, 64, 100):
+for M, parts in [(1, (10240, 6144, 48, 48)), (13, (10240, 6144, 48, 48)), (64, (10240, 6144, 48, 48)),
+                 (100, (10240, 6144, 48, 48)), (1, (17408, 17408)), (24, (17408, 17408)), (48, (17408, 17408))]:
     Kd = 5120
-    ws_ = [torch.randn(n, Kd, device=dev).to(K.FP8) for n in (10240, 6144, 48, 48)]
+    ws_ = [torch.randn(n, Kd, device=dev).to(K.FP8) for n in parts]
     sc_ = [torch.rand((), device=dev) for _ in ws_]
     xq = torch.randn(M, Kd, device=dev).to(K.FP8)
     one = torch.ones((), device=dev)
@@ -78,7 +79,7 @@ for M in (1, 13, 64, 100):
     W = torch.cat(ws_)
     sv = torch.cat([sc.expand(w.shape[0]) for w, sc in zip(ws_, sc_)]).contiguous()
     y = K.mm_fp8(xq, W, sv, K.mm_fp8_cfg(M, W.shape[0]))
-    check(f"mm_fp8 M={M}", y, ref, 1e-2, 1e-2)
+    check(f"mm_fp8 M={M} N={W.shape[0]}", y, ref, 1e-2, 1e-2)
 
 # ---- conv1d varlen with slot states
 def conv_cat(qkv3):

@@ -51,16 +51,19 @@ def _mm_fp8_kernel(x_ptr, w_ptr, s_ptr, y_ptr, M, N, K: tl.constexpr, BM: tl.con
 
 
 def mm_fp8_cfg(M, N):
-    """Tile config by M (sweep: scratch/mm_merge.py, K = 5120); None: use cuBLAS."""
+    """Tile config by M (sweep: scratch/mmtune.py, K = 5120, timed in CUDA graphs without L2 flushes); None: use
+    cuBLAS."""
     wide = N > 24576
     if M <= 16:
         return dict(BM=16, BN=64, BK=128, num_warps=4, STAGES=3) if wide else \
             dict(BM=16, BN=32, BK=256, num_warps=4, STAGES=3)
+    if M <= 32 and wide:
+        return dict(BM=32, BN=64, BK=128, num_warps=4, STAGES=3)
     if M <= 64:
-        return dict(BM=64, BN=128, BK=128, num_warps=4, STAGES=3) if wide else \
-            dict(BM=64, BN=64, BK=256, num_warps=4, STAGES=3)
+        return dict(BM=64, BN=32, BK=128, num_warps=4, STAGES=5) if wide else \
+            dict(BM=64, BN=64, BK=128, num_warps=4, STAGES=5)
     if M <= 128 and not wide:
-        return dict(BM=128, BN=64, BK=128, num_warps=4, STAGES=4)
+        return dict(BM=128, BN=128, BK=128, num_warps=8, STAGES=5)
     return None
 
 
