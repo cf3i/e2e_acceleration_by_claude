@@ -170,6 +170,9 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
 | fused GDN chunk recurrence + output, conv fast path (78bf72d) | 8.85 s | 41.65 s |
 | small-M GEMM retune, graph-loop timing (2defad5) | 8.77 s | — |
 | **official p3_s01_kernels / _longctx (2defad5)** | **8.86 s** (acc 0.945) | **40.64 s** (acc 0.945) |
+| GDN chunk kernel BV 64 / 4 warps / 3 stages (e8ea498; official p3_s02_gdnchunk) | 8.77 s | 39.61 s |
+| gdn_decode tiers tuned in-model under the power cap (3eaf6fe; official p3_s03_inmodel) | 8.67 s (A/B) | 39.8 s (A/B, noisy) |
+| GDN prefill: recompute_w_u fused into the chunk recurrence (0abefc7; official p3_s04_gdnfuse) | 8.59 s (A/B) | mixed step −1.8 ms |
 | vLLM 0.30 fp8, same workloads | 17.54 s | 91.96 s |
 
 ## Where the time is vs physics (2defad5 + 01fe367)
@@ -191,3 +194,42 @@ Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs
 - Lesson (benchmarks): Triton `do_bench` flushes L2 and leaves dirty lines that skew 30–60 µs kernels; time in
   CUDA graphs cycling over ≥ 2 weight copies instead. Warm up on a side stream only after `wait_stream`
   (otherwise the first launch races the input initialization — it looked like a kernel OOB bug).
+
+## Measurement: official runs vs same-GPU A/B (p3_s03 / p3_s04)
+- Official runs land on different nodes: p3_s03 8.98 s (h100-5) vs p3_s02 8.77 s (h100-2) although same-GPU A/B
+  (alternating revisions, 2 rounds, dev job) gives e8ea498 8.74 / 3eaf6fe 8.67 / 0abefc7 8.59 s. p3_s04 official
+  8.47 s. Node-to-node spread ~2–3% > one change: compare revisions only on one GPU (`/mnt/data/u/feic/tmp_ab/ab.sh`).
+- longctx makespan depends on the scheduling trajectory (620–756 steps across runs of nearby revisions; one run
+  even had a different accuracy 0.953 from a different batch composition): judge kernels by per-step GPU time
+  (`scratch/prof_mixed.py`) instead.
+
+## The power wall (longctx)
+- Mixed steps run at ~690 of 700 W (throttle reason SW power cap), SM clock ~1.55–1.6 GHz instead of 1.98.
+  cuBLAS FP8 there: ~1.35 PFLOPS. Longctx compute floor ≈ 549k prompt tokens × 48.7 GFLOP / 1.35 PF ≈ 20 s +
+  ~1.2 s attention; mixed steps now take ~33 s of the run (≈ 64% of floor efficiency, GEMMs themselves ≈ 95%).
+- Consequence: memory-bound kernels must be tuned inside the model. gdn_decode: an isolated micro showed a tie
+  between configs, in-model (lower clocks) the software-pipelined head loop (HPP 4, STAGES 3) wins: 128 rows
+  7.31 → 6.87 ms per decode step, 56 decode rows of a mixed step 4.05 → 3.41 ms.
+- attn_decode: num_warps / num_stages / nsplit all within ±2% in-model (KV-bandwidth bound); unchanged.
+
+## GDN prefill: no w / u in HBM (0abefc7)
+- fla computes u = A (beta v), w = A (beta e^g k) in a separate kernel, and the recurrence uses v_new = u − w h.
+  Same thing: v_new = A (beta (v − e^g k h)) — one 64×64 dot per chunk inside the recurrence instead of two
+  materialized [T, 48, 128] tensors (write + read ~74 MB per 2k-token layer) and a kernel. Same bf16 MMA inputs
+  (state diff vs before: 1 bf16 ulp), accuracy unchanged in both A/B workloads.
+- Per layer incl. kkt_solve: 1992 tokens 189 → 160 us, 4000: 350 → 289, 4×512: 177 → 142. The bit-identical
+  variant (u, w computed per chunk in registers) is 20% slower than before: the extra dots sit on the serial chain.
+- Masking A's upper triangle in-kernel instead of zero-filling (saves a memset) is slower (masked load stalls).
+- The recurrence is latency-bound (~4.6 us per 64-token chunk at 96 programs ≈ 15% of SM MMA peak); more
+  programs (BV 32) or warps do not help in Triton.
+
+## Tried in phase 3 kernel work, no gain
+- PDL + early `launch_dependents` + L2 bulk prefetch of the next GEMM's weights: all CTAs resident ~19 us early
+  (globaltimer), but ≤ 2.5 us per GEMM gain and none end-to-end.
+- Split-K for the N = 5120 linears at small M: ≤ 0.9 us. Rowwise-scaled merged GEMMs (bit-exact merging of
+  linears with different per-tensor scales): 15–30% slower than per-linear cuBLAS. gdn state contiguous layout:
+  same speed.
+- Prefill attention (ours ~473–487 TFLOPS): TMA descriptors +3%, warp specialization (Triton 3.6 crashes at
+  4 warps), lazy rescaling, manual QK^T pipelining: no gain. Reference FA3 (vLLM build, hdim 256 GQA 6, page 64):
+  653 TFLOPS at 1992@3000, 626 at 2×1024@2000, 520 at 1992@0 — worth ~2 ms per mixed step (~1.4% longctx),
+  needs a hand-written warp-specialized kernel.
