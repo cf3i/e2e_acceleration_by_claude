@@ -26,6 +26,15 @@ FP8 = torch.float8_e4m3fn
 PDL = os.environ.get("AGENTOPT_PDL", "1") != "0"
 
 
+@triton.jit
+def _rbf16(x):
+    """x rounded to bf16, returned as fp32 (bit-exact .to(bf16).to(fp32)); one packed cvt per element pair, where
+    the round trip compiles to one scalar cvt per element."""
+    return tl.inline_asm_elementwise(
+        "{ .reg .b32 t; cvt.rn.bf16x2.f32 t, $3, $2; shl.b32 $0, t, 16; and.b32 $1, t, 0xffff0000; }",
+        "=r,=r,r,r", [x], dtype=tl.float32, is_pure=True, pack=2)
+
+
 # ---------------------------------------------------------------- FP8 GEMM for small M (merged weights)
 # y[:, n] = (x @ W^T)[:, n] * s[n]: W is several linears sharing an input stacked along N (each keeps its own
 # per-tensor scale, repeated in s), so one launch streams all of them. Small M is weight-read bound: narrow N tiles
@@ -89,13 +98,13 @@ def _add_rmsnorm_kernel(res_ptr, d_ptr, ds_ptr, w_ptr, q_ptr, s_ptr, out_ptr, N,
     x = tl.load(res_ptr + row * N + offs, mask=m, other=0.0).to(tl.float32)
     if HAS_DELTA:
         d = tl.load(d_ptr + row * N + offs, mask=m, other=0.0).to(tl.float32)
-        d = (d * tl.load(ds_ptr + row)).to(tl.bfloat16).to(tl.float32)
+        d = _rbf16(d * tl.load(ds_ptr + row))
         x = (x + d).to(tl.bfloat16)
         tl.store(res_ptr + row * N + offs, x, mask=m)
         x = x.to(tl.float32)
     var = tl.sum(x * x, 0) / N
     w = tl.load(w_ptr + offs, mask=m, other=0.0)
-    y = (x * tl.rsqrt(var + eps) * w).to(tl.bfloat16).to(tl.float32)
+    y = _rbf16(x * tl.rsqrt(var + eps) * w)
     if QUANT:
         s = tl.maximum(tl.max(tl.abs(y), 0), 1e-12) / 448.0
         tl.store(q_ptr + row * N + offs, tl.clamp(y / s, -448.0, 448.0).to(tl.float8e4nv), mask=m)
@@ -130,17 +139,17 @@ def _silu_mul_quant_kernel(g_ptr, u_ptr, xs_ptr, q_ptr, s_ptr, N, GS, BLOCK: tl.
     for off in range(0, N, BLOCK):  # pass 1: row amax
         offs = off + tl.arange(0, BLOCK)
         m = offs < N
-        g = (tl.load(g_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-        u = (tl.load(u_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-        h = (g * tl.sigmoid(g) * u).to(tl.bfloat16).to(tl.float32)
+        g = _rbf16(tl.load(g_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs)
+        u = _rbf16(tl.load(u_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs)
+        h = _rbf16(g * tl.sigmoid(g) * u)
         amax = tl.maximum(amax, tl.abs(h))
     s = tl.maximum(tl.max(amax, 0), 1e-12) / 448.0
     for off in range(0, N, BLOCK):  # pass 2: quantize (the row is in L2)
         offs = off + tl.arange(0, BLOCK)
         m = offs < N
-        g = (tl.load(g_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-        u = (tl.load(u_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-        h = (g * tl.sigmoid(g) * u).to(tl.bfloat16).to(tl.float32)
+        g = _rbf16(tl.load(g_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs)
+        u = _rbf16(tl.load(u_ptr + row * GS + offs, mask=m, other=0.0).to(tl.float32) * xs)
+        h = _rbf16(g * tl.sigmoid(g) * u)
         tl.store(q_ptr + row * N + offs, tl.clamp(h / s, -448.0, 448.0).to(tl.float8e4nv), mask=m)
     tl.store(s_ptr + row, s)
 
@@ -148,9 +157,9 @@ def _silu_mul_quant_kernel(g_ptr, u_ptr, xs_ptr, q_ptr, s_ptr, N, GS, BLOCK: tl.
 @triton.jit
 def _silu_mul_chunk(g_ptr, u_ptr, base, off, xs, CH: tl.constexpr):
     offs = off + tl.arange(0, CH)
-    g = (tl.load(g_ptr + base + offs).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-    u = (tl.load(u_ptr + base + offs).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-    return (g * tl.sigmoid(g) * u).to(tl.bfloat16).to(tl.float32)
+    g = _rbf16(tl.load(g_ptr + base + offs).to(tl.float32) * xs)
+    u = _rbf16(tl.load(u_ptr + base + offs).to(tl.float32) * xs)
+    return _rbf16(g * tl.sigmoid(g) * u)
 
 
 @triton.jit
@@ -196,7 +205,7 @@ def silu_mul_quant(gate, up, xs):
 @triton.jit
 def _conv_out(acc, rows, rm, c0, q_out, k_out, v_out, QK: tl.constexpr, VC: tl.constexpr, BT: tl.constexpr,
               BLOCK_C: tl.constexpr, DK: tl.constexpr):
-    y = (acc * tl.sigmoid(acc)).to(tl.bfloat16).to(tl.float32)
+    y = _rbf16(acc * tl.sigmoid(acc))
     cc = tl.arange(0, BLOCK_C)
     r64 = rows.to(tl.int64)
     if c0 < 2 * QK:
@@ -236,8 +245,7 @@ def _conv1d_seq_kernel(x_ptr, xs_ptr, w_ptr, state_ptr, q_out, k_out, v_out, seq
         x2 = tl.load(st + 2 * C + offs).to(tl.float32)
         for t in range(n):
             row = t0 + t
-            xt = (tl.load(x_ptr + row.to(tl.int64) * XS + offs).to(tl.float32)
-                  * tl.load(xs_ptr + row)).to(tl.bfloat16).to(tl.float32)
+            xt = _rbf16(tl.load(x_ptr + row.to(tl.int64) * XS + offs).to(tl.float32) * tl.load(xs_ptr + row))
             acc = x0 * w0 + x1 * w1 + x2 * w2 + xt * w3
             _conv_out(acc[None, :], tl.full((1,), 0, tl.int32) + row, tl.full((1,), 1, tl.int1), c0,
                       q_out, k_out, v_out, QK, VC, 1, BLOCK_C, DK)
@@ -258,7 +266,7 @@ def _conv_taps(x_ptr, xs_ptr, w_ptr, state_ptr, rows, rm, offs, start, slot, XS,
         fx = src >= start
         xv = tl.load(x_ptr + src.to(tl.int64)[:, None] * XS + offs[None, :], mask=(rm & fx)[:, None],
                      other=0.0).to(tl.float32)
-        xv = (xv * tl.load(xs_ptr + src, mask=rm & fx, other=0.0)[:, None]).to(tl.bfloat16).to(tl.float32)
+        xv = _rbf16(xv * tl.load(xs_ptr + src, mask=rm & fx, other=0.0)[:, None])
         if STATE:
             j = src - start + 3
             sv = tl.load(state_ptr + (slot * 3 + j)[:, None] * C + offs[None, :],
@@ -361,8 +369,8 @@ def _gdn_gates_kernel(a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_ptr, g_ptr, beta_ptr, 
     h = tl.arange(0, BH)
     m = h < HV
     xs = tl.load(xs_ptr + r)
-    a = (tl.load(a_ptr + r * AS + h, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-    b = (tl.load(b_ptr + r * AS + h, mask=m, other=0.0).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+    a = _rbf16(tl.load(a_ptr + r * AS + h, mask=m, other=0.0).to(tl.float32) * xs)
+    b = _rbf16(tl.load(b_ptr + r * AS + h, mask=m, other=0.0).to(tl.float32) * xs)
     x = a + tl.load(dtb_ptr + h, mask=m, other=0.0)
     sp = tl.where(x > 20.0, x, tl.log(1.0 + tl.exp(x)))
     tl.store(g_ptr + r * HV + h, -tl.exp(tl.load(alog_ptr + h, mask=m, other=0.0)) * sp, mask=m)
@@ -406,8 +414,8 @@ def _gdn_decode_kernel(q_ptr, k_ptr, v_ptr, a_ptr, b_ptr, xs_ptr, alog_ptr, dtb_
             q = tl.load(q_ptr + (r * HK + kh) * DK + dk).to(tl.float32) * (1.0 / tl.sqrt(DK * 1.0))
             k = tl.load(k_ptr + (r * HK + kh) * DK + dk).to(tl.float32)
             v = tl.load(v_ptr + (r * HV + hv) * DV + dv).to(tl.float32)
-            a = (tl.load(a_ptr + r * AS + hv).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-            b = (tl.load(b_ptr + r * AS + hv).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+            a = _rbf16(tl.load(a_ptr + r * AS + hv).to(tl.float32) * xs)
+            b = _rbf16(tl.load(b_ptr + r * AS + hv).to(tl.float32) * xs)
             x = a + tl.load(dtb_ptr + hv)
             sp = tl.where(x > 20.0, x, tl.log(1.0 + tl.exp(x)))
             g = -tl.exp(tl.load(alog_ptr + hv)) * sp
@@ -694,11 +702,11 @@ def _gated_norm_quant_kernel(o_ptr, z_ptr, xs_ptr, w_ptr, q_ptr, s_ptr, eps, ZS,
     m = (h < H)[:, None]
     off = row * H * D + h[:, None] * D + d[None, :]
     o = tl.load(o_ptr + off, mask=m, other=0.0).to(tl.float32)
-    z = (tl.load(z_ptr + row * ZS + h[:, None] * D + d[None, :], mask=m, other=0.0).to(tl.float32) * tl.load(xs_ptr + row)).to(tl.bfloat16).to(tl.float32)
+    z = _rbf16(tl.load(z_ptr + row * ZS + h[:, None] * D + d[None, :], mask=m, other=0.0).to(tl.float32) * tl.load(xs_ptr + row))
     var = tl.sum(o * o, 1) / D
     w = tl.load(w_ptr + d)
     y = o * tl.rsqrt(var + eps)[:, None] * w[None, :] * (z * tl.sigmoid(z))
-    y = y.to(tl.bfloat16).to(tl.float32)
+    y = _rbf16(y)
     s = tl.maximum(tl.max(tl.max(tl.where(m, tl.abs(y), 0.0), 1), 0), 1e-12) / 448.0
     tl.store(q_ptr + off, tl.clamp(y / s, -448.0, 448.0).to(tl.float8e4nv), mask=m)
     tl.store(s_ptr + row, s)
@@ -737,13 +745,13 @@ def _qkv_prep_kernel(qr_ptr, kr_ptr, vr_ptr, xs_ptr, pos_ptr, slot_map, qn_ptr, 
         else:
             src = kr_ptr + t * KS + (h - HQ) * D
             nw = kn_ptr
-        x = (tl.load(src + d).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
+        x = _rbf16(tl.load(src + d).to(tl.float32) * xs)
         rstd = tl.rsqrt(tl.sum(x * x, 0) / D + eps)
         y = (x * rstd * tl.load(nw + d)).to(tl.bfloat16)
-        x1 = (tl.load(src + half).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-        x2 = (tl.load(src + R // 2 + half).to(tl.float32) * xs).to(tl.bfloat16).to(tl.float32)
-        x1 = (x1 * rstd * tl.load(nw + half)).to(tl.bfloat16).to(tl.float32)
-        x2 = (x2 * rstd * tl.load(nw + R // 2 + half)).to(tl.bfloat16).to(tl.float32)
+        x1 = _rbf16(tl.load(src + half).to(tl.float32) * xs)
+        x2 = _rbf16(tl.load(src + R // 2 + half).to(tl.float32) * xs)
+        x1 = _rbf16(x1 * rstd * tl.load(nw + half))
+        x2 = _rbf16(x2 * rstd * tl.load(nw + R // 2 + half))
         inv_freq = tl.exp2(-(2.0 * half.to(tl.float32) / R) * log2_theta)
         f = pos * inv_freq
         c = tl.cos(f)
@@ -956,8 +964,8 @@ def _attn_gate_quant_kernel(o_ptr, qr_ptr, xs_ptr, q_ptr, s_ptr, QS, H: tl.const
     m = (h < H)[:, None]
     o = tl.load(o_ptr + row * H * D + h[:, None] * D + d[None, :], mask=m, other=0.0).to(tl.float32)
     gate = tl.load(qr_ptr + row * QS + h[:, None] * 2 * D + D + d[None, :], mask=m, other=0.0).to(tl.float32)
-    gate = (gate * tl.load(xs_ptr + row)).to(tl.bfloat16).to(tl.float32)
-    y = (o * tl.sigmoid(gate)).to(tl.bfloat16).to(tl.float32)
+    gate = _rbf16(gate * tl.load(xs_ptr + row))
+    y = _rbf16(o * tl.sigmoid(gate))
     s = tl.maximum(tl.max(tl.max(tl.where(m, tl.abs(y), 0.0), 1), 0), 1e-12) / 448.0
     tl.store(q_ptr + row * H * D + h[:, None] * D + d[None, :], tl.clamp(y / s, -448.0, 448.0).to(tl.float8e4nv),
              mask=m)
