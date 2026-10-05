@@ -456,6 +456,127 @@ def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows,
 # w / u are never materialized, the per-chunk states stay in registers, the initial / final state is read / written
 # in place in the slot pool (bf16) and padded sequences (length 0) cost nothing. All sizes are fixed by the caller
 # (padded cu_seqlens / chunk_indices), so the whole step can be captured in a CUDA graph.
+# A = (I + X)^-1, X = strictly-lower(beta_i k_i.k_j exp2(g_i - g_j)) per 64-token chunk and value head (fla's
+# kkt + solve_tril), with all of the inversion on tensor cores: 16 x 16 diagonal blocks by (I + Y)^-1 =
+# (I - Y)(I + Y^2)(I + Y^4)(I + Y^8) (Y nilpotent), then block merges, tf32 like fla's merges. One program per chunk
+# and 3 value heads sharing one K head (k k^T computed once). Same error vs an fp64 inverse as fla (bf16 output
+# rounding), 48 -> 18 us per layer for 2k tokens (scratch/kkt.py; fla: forward substitution, latency-bound).
+@triton.jit
+def _inv16(x, eye, PREC: tl.constexpr):
+    y = -x
+    p = eye + y
+    for _ in tl.static_range(3):
+        y = tl.dot(y, y, input_precision=PREC)
+        p = p + tl.dot(p, y, input_precision=PREC)
+    return p
+
+
+@triton.jit
+def _gx(kk, ga, gb, ba, ma, mb, STRICT: tl.constexpr, o_c):
+    m = ma[:, None] & mb[None, :]
+    if STRICT:
+        m = m & (o_c[:, None] > o_c[None, :])
+    return tl.where(m, kk * tl.exp2(ga[:, None] - gb[None, :]), 0.0) * ba[:, None]
+
+
+@triton.jit
+def _gdn_kkt_kernel(k, g_raw, g, beta, A, cu_seqlens, chunk_indices, gscale, H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr,
+               BT: tl.constexpr, HPP: tl.constexpr, PREC: tl.constexpr):
+    gdc_wait()
+    i_t, i_hg = tl.program_id(0), tl.program_id(1)
+    i_n = tl.load(chunk_indices + i_t * 2).to(tl.int32)
+    i_t = tl.load(chunk_indices + i_t * 2 + 1).to(tl.int32)
+    bos = tl.load(cu_seqlens + i_n).to(tl.int32)
+    T = tl.load(cu_seqlens + i_n + 1).to(tl.int32) - bos
+    if i_t * BT >= T:
+        return
+    BC: tl.constexpr = 16
+    o_c = tl.arange(0, BC)
+    t0 = i_t * BT + o_c
+    t1 = t0 + BC
+    t2 = t1 + BC
+    t3 = t2 + BC
+    m0 = t0 < T
+    m1 = t1 < T
+    m2 = t2 < T
+    m3 = t3 < T
+    G: tl.constexpr = HV // H
+    tl.static_assert(G % HPP == 0)
+    hv0 = i_hg * HPP
+    kh = hv0 // G
+    o_k = tl.arange(0, K)
+    k0 = tl.load(k + ((bos + t0) * H + kh).to(tl.int64)[:, None] * K + o_k[None, :], mask=m0[:, None], other=0.0)
+    k1 = tl.load(k + ((bos + t1) * H + kh).to(tl.int64)[:, None] * K + o_k[None, :], mask=m1[:, None], other=0.0)
+    k2 = tl.load(k + ((bos + t2) * H + kh).to(tl.int64)[:, None] * K + o_k[None, :], mask=m2[:, None], other=0.0)
+    k3 = tl.load(k + ((bos + t3) * H + kh).to(tl.int64)[:, None] * K + o_k[None, :], mask=m3[:, None], other=0.0)
+    kk00 = tl.dot(k0, tl.trans(k0))
+    kk10 = tl.dot(k1, tl.trans(k0))
+    kk11 = tl.dot(k1, tl.trans(k1))
+    kk20 = tl.dot(k2, tl.trans(k0))
+    kk21 = tl.dot(k2, tl.trans(k1))
+    kk22 = tl.dot(k2, tl.trans(k2))
+    kk30 = tl.dot(k3, tl.trans(k0))
+    kk31 = tl.dot(k3, tl.trans(k1))
+    kk32 = tl.dot(k3, tl.trans(k2))
+    kk33 = tl.dot(k3, tl.trans(k3))
+    eye = (o_c[:, None] == o_c[None, :]).to(tl.float32)
+    z = tl.zeros((BC, BC), A.dtype.element_ty)
+    o_t = i_t * BT + tl.arange(0, BT)
+    m_t = o_t < T
+    for j in tl.static_range(HPP):
+        # chunk-local cumsum of the log2 gates (as fla's chunk_local_cumsum), stored for the chunk kernel and
+        # re-read in 16-row pieces
+        pg = (bos + o_t).to(tl.int64) * HV + hv0 + j
+        tl.store(g + pg, tl.cumsum(tl.load(g_raw + pg, mask=m_t, other=0.0), axis=0) * gscale, mask=m_t)
+    tl.debug_barrier()
+    for j in tl.static_range(HPP):
+        hv = hv0 + j
+        g0 = tl.load(g + (bos + t0).to(tl.int64) * HV + hv, mask=m0, other=0.0)
+        g1 = tl.load(g + (bos + t1).to(tl.int64) * HV + hv, mask=m1, other=0.0)
+        g2 = tl.load(g + (bos + t2).to(tl.int64) * HV + hv, mask=m2, other=0.0)
+        g3 = tl.load(g + (bos + t3).to(tl.int64) * HV + hv, mask=m3, other=0.0)
+        b0 = tl.load(beta + (bos + t0).to(tl.int64) * HV + hv, mask=m0, other=0.0)
+        b1 = tl.load(beta + (bos + t1).to(tl.int64) * HV + hv, mask=m1, other=0.0)
+        b2 = tl.load(beta + (bos + t2).to(tl.int64) * HV + hv, mask=m2, other=0.0)
+        b3 = tl.load(beta + (bos + t3).to(tl.int64) * HV + hv, mask=m3, other=0.0)
+        i00 = _inv16(_gx(kk00, g0, g0, b0, m0, m0, True, o_c), eye, PREC)
+        i11 = _inv16(_gx(kk11, g1, g1, b1, m1, m1, True, o_c), eye, PREC)
+        i22 = _inv16(_gx(kk22, g2, g2, b2, m2, m2, True, o_c), eye, PREC)
+        i33 = _inv16(_gx(kk33, g3, g3, b3, m3, m3, True, o_c), eye, PREC)
+        x10 = _gx(kk10, g1, g0, b1, m1, m0, False, o_c)
+        x32 = _gx(kk32, g3, g2, b3, m3, m2, False, o_c)
+        x20 = _gx(kk20, g2, g0, b2, m2, m0, False, o_c)
+        x21 = _gx(kk21, g2, g1, b2, m2, m1, False, o_c)
+        x30 = _gx(kk30, g3, g0, b3, m3, m0, False, o_c)
+        x31 = _gx(kk31, g3, g1, b3, m3, m1, False, o_c)
+        i10 = -tl.dot(tl.dot(i11, x10, input_precision=PREC), i00, input_precision=PREC)
+        i32 = -tl.dot(tl.dot(i33, x32, input_precision=PREC), i22, input_precision=PREC)
+        # lower-left 32 x 32: -inv(B) L inv(A)
+        m20 = tl.dot(x20, i00, input_precision=PREC) + tl.dot(x21, i10, input_precision=PREC)
+        m21 = tl.dot(x21, i11, input_precision=PREC)
+        m30 = tl.dot(x30, i00, input_precision=PREC) + tl.dot(x31, i10, input_precision=PREC)
+        m31 = tl.dot(x31, i11, input_precision=PREC)
+        i20 = -tl.dot(i22, m20, input_precision=PREC)
+        i21 = -tl.dot(i22, m21, input_precision=PREC)
+        i30 = -(tl.dot(i32, m20, input_precision=PREC) + tl.dot(i33, m30, input_precision=PREC))
+        i31 = -(tl.dot(i32, m21, input_precision=PREC) + tl.dot(i33, m31, input_precision=PREC))
+        pa = A + hv * BT + o_c[None, :]
+        r0 = pa + ((bos + t0) * HV).to(tl.int64)[:, None] * BT
+        r1 = pa + ((bos + t1) * HV).to(tl.int64)[:, None] * BT
+        r2 = pa + ((bos + t2) * HV).to(tl.int64)[:, None] * BT
+        r3 = pa + ((bos + t3) * HV).to(tl.int64)[:, None] * BT
+        dt = A.dtype.element_ty
+        tl.store(r0, i00.to(dt), mask=m0[:, None]); tl.store(r0 + 16, z, mask=m0[:, None])
+        tl.store(r0 + 32, z, mask=m0[:, None]); tl.store(r0 + 48, z, mask=m0[:, None])
+        tl.store(r1, i10.to(dt), mask=m1[:, None]); tl.store(r1 + 16, i11.to(dt), mask=m1[:, None])
+        tl.store(r1 + 32, z, mask=m1[:, None]); tl.store(r1 + 48, z, mask=m1[:, None])
+        tl.store(r2, i20.to(dt), mask=m2[:, None]); tl.store(r2 + 16, i21.to(dt), mask=m2[:, None])
+        tl.store(r2 + 32, i22.to(dt), mask=m2[:, None]); tl.store(r2 + 48, z, mask=m2[:, None])
+        tl.store(r3, i30.to(dt), mask=m3[:, None]); tl.store(r3 + 16, i31.to(dt), mask=m3[:, None])
+        tl.store(r3 + 32, i32.to(dt), mask=m3[:, None]); tl.store(r3 + 48, i33.to(dt), mask=m3[:, None])
+
+
+
 @triton.jit
 def _gdn_chunk_kernel(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale,
                       H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr, V: tl.constexpr, BT: tl.constexpr,
@@ -537,17 +658,14 @@ def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, n_
     cu_seqlens [n_seqs + 1], chunk_indices [NT, 2] (int64, fixed sizes; padded
     sequences have length 0, padded chunk entries point to a padded sequence). Returns o [T, HV, DV] (rows outside
     the sequences are undefined)."""
-    from fla.ops.gated_delta_rule.chunk_fwd import chunk_gated_delta_rule_fwd_kkt_solve_kernel
-    from fla.ops.utils import chunk_local_cumsum
     from fla.ops.utils.constant import RCP_LN2
     T, HK, DK = k.shape
     HV, DV = v.shape[1], v.shape[2]
-    assert k.is_contiguous() and v.is_contiguous()
-    gc = chunk_local_cumsum(g[None], chunk_size=64, scale=RCP_LN2, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices)
-    A = torch.zeros(1, T, HV, 64, device=k.device, dtype=k.dtype)   # upper blocks are never written
-    chunk_gated_delta_rule_fwd_kkt_solve_kernel[(chunk_indices.shape[0], HV)](
-        k=k[None], g=gc, beta=beta[None], A=A, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, T=T, H=HK, HV=HV,
-        K=DK, BT=64, BC=16)
+    assert k.is_contiguous() and v.is_contiguous() and g.is_contiguous() and beta.is_contiguous()
+    gc = torch.empty_like(g)
+    A = torch.empty(T, HV, 64, device=k.device, dtype=k.dtype)
+    _gdn_kkt_kernel[(chunk_indices.shape[0], HV // 3)](k, g, gc, beta, A, cu_seqlens, chunk_indices, RCP_LN2, H=HK, HV=HV,
+                                                       K=DK, BT=64, HPP=3, PREC="tf32", num_warps=1, launch_pdl=PDL)
     o = torch.empty_like(v)
     c = GDN_CHUNK_CFG
     _gdn_chunk_kernel[(DV // c["BV"], n_seqs * HV)](q, k, v, A, beta, gc, o, state, seq_slot, cu_seqlens, scale,
