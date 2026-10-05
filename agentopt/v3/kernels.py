@@ -451,16 +451,18 @@ def gdn_decode(q, k, v, a, b, xs, A_log, dt_bias, state, row_slot, row0, n_rows,
 
 
 # ---------------------------------------------------------------- Gated-DeltaNet: chunked prefill
-# fla's chunked algorithm (WY representation) with fla's kernels for the intra-chunk parts; the inter-chunk state
-# recurrence and the outputs are our own fused kernel, so that the per-chunk states stay in registers, the initial /
-# final state is read / written in place in the slot pool (bf16) and padded sequences (length 0) cost nothing. All sizes are fixed by the caller (padded
-# cu_seqlens / chunk_indices), so the whole step can be captured in a CUDA graph.
+# fla's chunked algorithm (WY representation) with fla's fused kkt + solve_tril kernel for A = (I + tril(beta K K^T
+# exp(g_i - g_j)))^-1; the rest (fla's recompute_w_u + chunk_fwd_h + chunk_fwd_o) is our own fused kernel, so that
+# w / u are never materialized, the per-chunk states stay in registers, the initial / final state is read / written
+# in place in the slot pool (bf16) and padded sequences (length 0) cost nothing. All sizes are fixed by the caller
+# (padded cu_seqlens / chunk_indices), so the whole step can be captured in a CUDA graph.
 @triton.jit
-def _gdn_chunk_kernel(q, k, v, w, g, o, state, seq_slot, cu_seqlens, scale,
+def _gdn_chunk_kernel(q, k, v, A, beta, g, o, state, seq_slot, cu_seqlens, scale,
                       H: tl.constexpr, HV: tl.constexpr, K: tl.constexpr, V: tl.constexpr, BT: tl.constexpr,
                       BV: tl.constexpr):
-    """Inter-chunk recurrence fused with the chunk outputs (same arithmetic as fla's chunk_fwd_h + chunk_fwd_o,
-    bf16 states and v_new as MMA inputs): per chunk, v_new = u - w h, o = scale (q h * exp(g) + tril(q k^T * exp(g_i - g_j)) v_new), then
+    """Inter-chunk recurrence fused with the chunk outputs: per chunk, v_new = u - w h with fla's u = A (beta v),
+    w = A (beta exp(g) k) computed as v_new = A (beta (v - exp(g) k h)) (one 64 x 64 dot instead of two, no w / u
+    in HBM; bf16 MMA inputs as in fla), o = scale (q h exp(g) + tril(q k^T exp(g_i - g_j)) v_new), then
     h <- h exp(g_last) + k^T (v_new exp(g_last - g)). The per-chunk states never leave registers."""
     gdc_wait()
     i_v, i_nh = tl.program_id(0), tl.program_id(1)
@@ -473,6 +475,7 @@ def _gdn_chunk_kernel(q, k, v, w, g, o, state, seq_slot, cu_seqlens, scale,
         o_v = i_v * BV + tl.arange(0, BV)
         o_k1 = tl.arange(0, 64)
         o_k2 = 64 + o_k1
+        o_a = tl.arange(0, BT)
         st = state + (slot * HV + i_h) * K * V
         b_h1 = tl.load(st + o_k1[:, None] * V + o_v[None, :]).to(tl.float32)
         b_h2 = tl.load(st + o_k2[:, None] * V + o_v[None, :]).to(tl.float32)
@@ -480,26 +483,27 @@ def _gdn_chunk_kernel(q, k, v, w, g, o, state, seq_slot, cu_seqlens, scale,
         o += (bos * HV + i_h).to(tl.int64) * V
         q += (bos * H + i_h // (HV // H)).to(tl.int64) * K
         k += (bos * H + i_h // (HV // H)).to(tl.int64) * K
-        w += (bos * HV + i_h).to(tl.int64) * K
+        A += (bos * HV + i_h).to(tl.int64) * BT
         for i_t in range(NT):
             o_t = i_t * BT + tl.arange(0, BT)
             m_t = o_t < T
             h1 = b_h1.to(tl.bfloat16)
             h2 = b_h2.to(tl.bfloat16)
-            b_w = tl.load(w + o_t[:, None] * (HV * K) + o_k1[None, :], mask=m_t[:, None], other=0.0)
-            b_v = tl.dot(b_w, h1)
-            b_w = tl.load(w + o_t[:, None] * (HV * K) + o_k2[None, :], mask=m_t[:, None], other=0.0)
-            b_v += tl.dot(b_w, h2)
-            b_v = tl.load(v + o_t[:, None] * (HV * V) + o_v[None, :], mask=m_t[:, None], other=0.0) - b_v
-            b_q = tl.load(q + o_t[:, None] * (H * K) + o_k1[None, :], mask=m_t[:, None], other=0.0)
+            b_g = tl.load(g + (bos + o_t).to(tl.int64) * HV + i_h, mask=m_t, other=0.0).to(tl.float32)
+            b_b = tl.load(beta + (bos + o_t).to(tl.int64) * HV + i_h, mask=m_t, other=0.0).to(tl.float32)
             b_k1 = tl.load(k + o_k1[:, None] + o_t[None, :] * (H * K), mask=m_t[None, :], other=0.0)
+            b_k2 = tl.load(k + o_k2[:, None] + o_t[None, :] * (H * K), mask=m_t[None, :], other=0.0)
+            b_v = tl.dot(tl.trans(b_k1), h1)
+            b_v += tl.dot(tl.trans(b_k2), h2)
+            b_v = tl.load(v + o_t[:, None] * (HV * V) + o_v[None, :], mask=m_t[:, None], other=0.0).to(tl.float32) - b_v * tl.exp2(b_g)[:, None]
+            b_Aw = tl.load(A + o_t[:, None] * (HV * BT) + o_a[None, :], mask=m_t[:, None], other=0.0)
+            b_v = tl.dot(b_Aw, (b_v * b_b[:, None]).to(tl.bfloat16))
+            b_q = tl.load(q + o_t[:, None] * (H * K) + o_k1[None, :], mask=m_t[:, None], other=0.0)
             b_o = tl.dot(b_q, h1)
             b_A = tl.dot(b_q, b_k1)
             b_q = tl.load(q + o_t[:, None] * (H * K) + o_k2[None, :], mask=m_t[:, None], other=0.0)
-            b_k2 = tl.load(k + o_k2[:, None] + o_t[None, :] * (H * K), mask=m_t[None, :], other=0.0)
             b_o += tl.dot(b_q, h2)
             b_A += tl.dot(b_q, b_k2)
-            b_g = tl.load(g + (bos + o_t).to(tl.int64) * HV + i_h, mask=m_t, other=0.0).to(tl.float32)
             b_o = b_o * tl.exp2(b_g)[:, None]
             b_A = b_A * tl.exp2(b_g[:, None] - b_g[None, :])
             b_A = tl.where((o_t[:, None] >= o_t[None, :]) & (m_t[:, None] & m_t), b_A, 0)
@@ -519,6 +523,9 @@ def _gdn_chunk_kernel(q, k, v, w, g, o, state, seq_slot, cu_seqlens, scale,
 # 4-warp dots are much faster per chunk. (BV 16/32 with num_warps >= 4 and num_stages=1 miscompile in Triton 3.6:
 # out-of-bounds shared read.)
 GDN_CHUNK_CFG = {"BV": 64, "num_warps": 4, "num_stages": 3}
+# (Re-checked for the fused w / u version, scratch/gdnfuse.py: 1992 tokens 189 -> 160 us, 4000: 350 -> 289 us,
+# 4 x 512: 177 -> 142 us per layer including kkt_solve; num_stages 2 / 4, 8 warps and BV 32 are slower. Masking the
+# upper triangle of A in-kernel instead of zero-filling it is slower: the masked load stalls the serial chain.)
 
 
 
@@ -530,22 +537,24 @@ def gdn_prefill(q, k, v, g, beta, state, seq_slot, cu_seqlens, chunk_indices, n_
     cu_seqlens [n_seqs + 1], chunk_indices [NT, 2] (int64, fixed sizes; padded
     sequences have length 0, padded chunk entries point to a padded sequence). Returns o [T, HV, DV] (rows outside
     the sequences are undefined)."""
-    from fla.ops.gated_delta_rule.chunk_fwd import chunk_gated_delta_rule_fwd_intra
+    from fla.ops.gated_delta_rule.chunk_fwd import chunk_gated_delta_rule_fwd_kkt_solve_kernel
     from fla.ops.utils import chunk_local_cumsum
     from fla.ops.utils.constant import RCP_LN2
     T, HK, DK = k.shape
     HV, DV = v.shape[1], v.shape[2]
-    q, k, v, g, beta = q[None], k[None], v[None], g[None], beta[None]
-    gc = chunk_local_cumsum(g, chunk_size=64, scale=RCP_LN2, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices)
-    w, u, _ = chunk_gated_delta_rule_fwd_intra(k=k, v=v, g=gc, beta=beta, cu_seqlens=cu_seqlens,
-                                               chunk_indices=chunk_indices, chunk_size=64)
+    assert k.is_contiguous() and v.is_contiguous()
+    gc = chunk_local_cumsum(g[None], chunk_size=64, scale=RCP_LN2, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices)
+    A = torch.zeros(1, T, HV, 64, device=k.device, dtype=k.dtype)   # upper blocks are never written
+    chunk_gated_delta_rule_fwd_kkt_solve_kernel[(chunk_indices.shape[0], HV)](
+        k=k[None], g=gc, beta=beta[None], A=A, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices, T=T, H=HK, HV=HV,
+        K=DK, BT=64, BC=16)
     o = torch.empty_like(v)
     c = GDN_CHUNK_CFG
-    _gdn_chunk_kernel[(DV // c["BV"], n_seqs * HV)](q, k, u, w, gc, o, state, seq_slot, cu_seqlens, scale,
+    _gdn_chunk_kernel[(DV // c["BV"], n_seqs * HV)](q, k, v, A, beta, gc, o, state, seq_slot, cu_seqlens, scale,
                                                    H=HK, HV=HV, K=DK, V=DV, BT=64, BV=c["BV"],
                                                    num_warps=c["num_warps"], num_stages=c["num_stages"],
                                                    launch_pdl=PDL)
-    return o[0]
+    return o
 
 
 # ---------------------------------------------------------------- Gated RMSNorm (per head) * SiLU(z) + quant
