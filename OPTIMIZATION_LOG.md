@@ -153,3 +153,41 @@ bucket graphs + 64 slots (1.15×), state launch/bf16 (1.15×), in-place state (1
 - Both are bound by task 423's chain. With the same 751-token chain, ours costs 26.5 vs 27.4 ms per chain token.
 - vLLM admits all 128 agents, so its task p50 is 10.4 s vs ours 5.8 s (64 slots).
 - vLLM loads faster: 223 s vs 580 s. Final write-up: `results/FINAL_REPORT.md`.
+
+# Phase 3 — systems optimization toward the physical limit
+Fixed: FP8 per-tensor weights, bf16 lm_head / KV / recurrent state, greedy, no speculation (optimize the system,
+not the model). Task 423 (a 750-token repetition outlier) excluded from both workloads. Two workloads:
+gsm8k 127 tasks, and `gsm8k_longctx_128` (1k–7k-token prompts, no shared context). Rebaseline p2_s10: 18.19 s.
+Dev numbers (`results/_dev_*`, dev job, ±0.1 s / ±1 s) in order; official runs via `slurm/submit.sh` at the end.
+
+| step (commit) | 127-task | longctx |
+|---|---|---|
+| v3 engine: own forward, async token-budget scheduler, chunked prefill mixed with decode, paged KV, every step a CUDA graph (3252fc5) | 15.58 → 10.95 s | 51.5 s |
+| kernels: 128-row prefill attention tiles, single-pass silu_mul_quant, split-KV decode attention (d375bad) | 9.95 s | 47.4 s |
+| merged small-M FP8 GEMMs (gate\|up, qkv\|z\|b\|a, q\|k\|v) in Triton (802ce97) | 9.51 s | 45.0 s |
+| runner: no device sync per timed section, incremental tokenization (624421f) | 8.96 s | 44.6 s |
+| programmatic dependent launch on every kernel (b7bdbf8; off: 9.30 s) | 8.95 s | 42.2 s |
+| fused GDN chunk recurrence + output, conv fast path (78bf72d) | 8.85 s | 41.65 s |
+| small-M GEMM retune, graph-loop timing (2defad5) | 8.77 s | — |
+| **official p3_s01_kernels / _longctx (2defad5)** | **8.86 s** (acc 0.945) | **40.64 s** (acc 0.945) |
+| vLLM 0.30 fp8, same workloads | 17.54 s | 91.96 s |
+
+## Where the time is vs physics (2defad5 + 01fe367)
+- Mixed step (2×1024 prefill + 48 decode rows @ ctx 4000): 114 ms. GEMMs 76 ms at ~1.31 PFLOPS = cuBLAS FP8
+  practical peak on this (power-limited) GPU; silu/rmsnorm at 88–90% of practical HBM bandwidth; GDN prefill
+  (fla intra kernels + fused chunk kernel) ~11 ms vs ~2–3 ms of bytes/FLOPs — the main remaining gap.
+- Decode B=128 @ ctx 1000: 24.3 ms vs ~18.3 ms of bytes (weights 9.1 + state r/w 6.5 + KV 2.8 ms at 2.97 TB/s).
+  gdn_decode 2.66 TB/s = the ceiling of its own access pattern (pure tile read-modify-write: 2.64–2.86 TB/s;
+  flat in-place RMW 3.0 TB/s); attn_decode 2.8–3.0 TB/s; cuBLAS GEMMs 2.5–2.9 TB/s.
+- Decode B=1: 11.1 ms vs 8.5–9.1 ms weight read; the rest is ~1.5 ms of latency-bound small kernels.
+
+## Tried, no gain (reverted)
+- L2 prefetch of the next weights (`cp.async.bulk.prefetch.L2` before gdc_wait): per-element slower, bulk neutral.
+- Early `griddepcontrol.launch_dependents`: slower at B ≥ 64.
+- Two streams in mixed steps (decode rows ∥ prefill rows): GDN kernels never overlapped, attention 0.9 of 4.5 ms;
+  step time unchanged — both sides already fill every SM.
+- Triton GEMMs for down/out projections or large-M wide GEMMs: slower than cuBLAS.
+- gdn_decode with both reductions on the old state in one pass: same speed (bytes-bound, not reduction-bound).
+- Lesson (benchmarks): Triton `do_bench` flushes L2 and leaves dirty lines that skew 30–60 µs kernels; time in
+  CUDA graphs cycling over ≥ 2 weight copies instead. Warm up on a side stream only after `wait_stream`
+  (otherwise the first launch races the input initialization — it looked like a kernel OOB bug).
